@@ -6,12 +6,15 @@ import static io.netty.handler.codec.http.HttpResponseStatus.INTERNAL_SERVER_ERR
 import static io.netty.handler.codec.http.HttpResponseStatus.OK;
 import static io.netty.handler.codec.http.HttpResponseStatus.valueOf;
 import static java.lang.Integer.parseInt;
+import static java.lang.System.getenv;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.Arrays.stream;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static java.util.logging.Level.SEVERE;
 import static java.util.logging.Level.parse;
 import static java.util.logging.Logger.getGlobal;
 import static java.util.logging.Logger.getLogger;
+import static java.util.stream.Collectors.joining;
 import static java.util.stream.Collectors.toMap;
 import static javax.json.Json.createReader;
 import static net.pincette.jes.elastic.Logging.log;
@@ -20,6 +23,7 @@ import static net.pincette.jes.util.Kafka.fromConfig;
 import static net.pincette.rs.Chain.with;
 import static net.pincette.rs.Util.empty;
 import static net.pincette.util.Collections.list;
+import static net.pincette.util.Collections.map;
 import static net.pincette.util.Pair.pair;
 import static net.pincette.util.Util.tryToDoWithRethrow;
 import static net.pincette.util.Util.tryToGetRethrow;
@@ -34,18 +38,21 @@ import io.netty.handler.codec.http.HttpResponse;
 import java.io.InputStream;
 import java.net.URI;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.concurrent.CompletionStage;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.stream.Stream;
 import net.pincette.function.SideEffect;
 import net.pincette.jes.api.Request;
 import net.pincette.jes.api.Response;
 import net.pincette.jes.api.Server;
+import net.pincette.json.JsonUtil;
 import net.pincette.netty.http.HttpServer;
 import net.pincette.rs.Util;
 import net.pincette.util.Array;
-import net.pincette.util.Json;
+import net.pincette.util.Util.GeneralException;
 import org.reactivestreams.Publisher;
 
 /**
@@ -55,19 +62,53 @@ import org.reactivestreams.Publisher;
  * @since 1.0
  */
 public class ApiServer {
-  private static final String AUTHORIZATION_HEADER = "authorizationHeader";
+  private static final String AUTHORIZATION_HEADER = "elastic.log.authorizationHeader";
+  private static final String AUTHORIZATION_HEADER_ENV = "ELASTIC_LOG_AUTHORIZATION_HEADER";
   private static final String CONTEXT_PATH = "contextPath";
-  private static final String ELASTIC_LOG = "elastic.log";
+  private static final String CONTEXT_PATH_ENV = "CONTEXT_PATH";
   private static final String ENVIRONMENT = "environment";
+  private static final String ENVIRONMENT_ENV = "ENVIRONMENT";
   private static final String FANOUT_SECRET = "fanout.secret";
+  private static final String FANOUT_SECRET_ENV = "FANOUT_SECRET";
   private static final String FANOUT_URI = "fanout.uri";
+  private static final String FANOUT_URI_ENV = "FANOUT_URI";
   private static final String JWT_PUBLIC_KEY = "jwtPublicKey";
+  private static final String JWT_PUBLIC_KEY_ENV = "JWT_PUBLIC_KEY";
   private static final String KAFKA = "kafka";
+  private static final String KAFKA_PREFIX = "KAFKA_";
   private static final String LOG_LEVEL = "logLevel";
+  private static final String LOG_LEVEL_ENV = "LOG_LEVEL";
   private static final String MONGODB_DATABASE = "mongodb.database";
+  private static final String MONGODB_DATABASE_ENV = "MONGODB_DATABASE";
   private static final String MONGODB_URI = "mongodb.uri";
-  private static final String URI_FIELD = "uri";
-  private static final String VERSION = "1.1.3";
+  private static final String MONGODB_URI_ENV = "MONGODB_URI";
+  private static final String URI_FIELD = "elastic.log.uri";
+  private static final String URI_FIELD_ENV = "ELASTIC_LOG_URI";
+  private static final String VERSION = "1.1.4";
+  private static final Map<String, String> ENV_MAP =
+      map(
+          pair(AUTHORIZATION_HEADER, AUTHORIZATION_HEADER_ENV),
+          pair(CONTEXT_PATH, CONTEXT_PATH_ENV),
+          pair(ENVIRONMENT, ENVIRONMENT_ENV),
+          pair(FANOUT_SECRET, FANOUT_SECRET_ENV),
+          pair(FANOUT_URI, FANOUT_URI_ENV),
+          pair(JWT_PUBLIC_KEY, JWT_PUBLIC_KEY_ENV),
+          pair(LOG_LEVEL, LOG_LEVEL_ENV),
+          pair(MONGODB_DATABASE, MONGODB_DATABASE_ENV),
+          pair(MONGODB_URI, MONGODB_URI_ENV),
+          pair(URI_FIELD, URI_FIELD_ENV));
+
+  private static Optional<String> configEntry(final Config config, final String path) {
+    return Optional.ofNullable(ENV_MAP.get(path))
+        .map(System::getenv)
+        .map(Optional::of)
+        .orElseGet(() -> tryToGetSilent(() -> config.getString(path)));
+  }
+
+  private static String configEntryMust(final Config config, final String path) {
+    return configEntry(config, path)
+        .orElseThrow(() -> new GeneralException("Missing configuration entry " + path));
+  }
 
   private static void copyHeaders(final Response r1, final HttpResponse r2) {
     if (r1.headers != null) {
@@ -92,40 +133,61 @@ public class ApiServer {
         .orElse(false);
   }
 
+  private static Map<String, Object> kafkaConfig(final Config config) {
+    return kafkaEnv()
+        .reduce(
+            fromConfig(config, KAFKA),
+            (c, e) ->
+                SideEffect.<Map<String, Object>>run(
+                        () -> c.put(kafkaProperty(e.getKey()), e.getValue()))
+                    .andThenGet(() -> c),
+            (c1, c2) -> c1);
+  }
+
+  private static Stream<Entry<String, String>> kafkaEnv() {
+    return getenv().entrySet().stream().filter(e -> e.getKey().startsWith(KAFKA_PREFIX));
+  }
+
+  private static String kafkaProperty(final String env) {
+    return stream(env.substring(KAFKA_PREFIX.length()).split("_"))
+        .map(String::toLowerCase)
+        .collect(joining("."));
+  }
+
   public static void main(final String[] args) {
     final Config config = loadDefault();
-    final String contextPath = tryToGetSilent(() -> config.getString(CONTEXT_PATH)).orElse("");
-    final String environment = tryToGetSilent(() -> config.getString(ENVIRONMENT)).orElse("dev");
-    final Level logLevel = parse(tryToGetSilent(() -> config.getString(LOG_LEVEL)).orElse("INFO"));
+    final String contextPath = configEntry(config, CONTEXT_PATH).orElse("");
+    final String environment = configEntry(config, ENVIRONMENT).orElse("dev");
+    final Level logLevel = parse(configEntry(config, LOG_LEVEL).orElse("INFO"));
     final Logger logger = getLogger("pincette-jes-http");
 
     logger.setLevel(logLevel);
 
-    tryToGetSilent(() -> config.getConfig(ELASTIC_LOG))
-        .ifPresent(
-            c ->
-                log(
-                    logger,
-                    logLevel,
-                    VERSION,
-                    environment,
-                    c.getString(URI_FIELD),
-                    c.getString(AUTHORIZATION_HEADER)));
+    if (configEntry(config, AUTHORIZATION_HEADER).isPresent()
+        && configEntry(config, URI_FIELD).isPresent()) {
+      log(
+          logger,
+          logLevel,
+          VERSION,
+          environment,
+          configEntry(config, URI_FIELD).orElse(null),
+          configEntry(config, AUTHORIZATION_HEADER).orElse(null));
+    }
 
     tryToDoWithRethrow(
         () ->
-            new Server()
-                .withContextPath(contextPath)
-                .withEnvironment(environment)
-                .withAudit("audit-" + environment)
-                .withBreakingTheGlass()
-                .withJwtPublicKey(config.getString(JWT_PUBLIC_KEY))
-                .withKafkaConfig(fromConfig(config, KAFKA))
-                .withMongoUri(config.getString(MONGODB_URI))
-                .withMongoDatabase(config.getString(MONGODB_DATABASE))
-                .withFanoutUri(config.getString(FANOUT_URI))
-                .withFanoutSecret(config.getString(FANOUT_SECRET))
-                .withLogger(logger),
+            setFanout(
+                new Server()
+                    .withContextPath(contextPath)
+                    .withEnvironment(environment)
+                    .withAudit("audit-" + environment)
+                    .withBreakingTheGlass()
+                    .withJwtPublicKey(configEntryMust(config, JWT_PUBLIC_KEY))
+                    .withKafkaConfig(kafkaConfig(config))
+                    .withMongoUri(configEntryMust(config, MONGODB_URI))
+                    .withMongoDatabase(configEntryMust(config, MONGODB_DATABASE))
+                    .withLogger(logger),
+                config),
         server ->
             tryToDoWithRethrow(
                 () ->
@@ -165,6 +227,14 @@ public class ApiServer {
                     .andThenGet(() -> completedFuture(empty())));
   }
 
+  private static Server setFanout(final Server server, final Config config) {
+    return configEntry(config, FANOUT_URI)
+        .map(
+            uri ->
+                server.withFanoutUri(uri).withFanoutSecret(configEntryMust(config, FANOUT_SECRET)))
+        .orElse(server);
+  }
+
   private static void start(final HttpServer server) {
     getGlobal().info("Ready");
     server.start();
@@ -197,7 +267,7 @@ public class ApiServer {
     }
 
     return Optional.ofNullable(r1.body)
-        .map(body -> with(body).map(Json::string))
+        .map(body -> with(body).map(JsonUtil::string))
         .map(chain -> returnsMultiple ? chain.separate(",").before("[").after("]") : chain)
         .map(chain -> chain.map(s -> s.getBytes(UTF_8)).map(Unpooled::wrappedBuffer).get());
   }
