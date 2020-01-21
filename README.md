@@ -41,10 +41,10 @@ You can run the JVM with the option ```-mx128m```.
 
 ## Docker
 
-Docker images can be found at [https://hub.docker.com/repository/docker/wdonne/pincette-jes-http](https://hub.docker.com/repository/docker/wdonne/pincette-jes-http). They expose port 9000. You can either use environment variables to configure them or add a configuration layer with a Docker file that looks like this:
+Docker images can be found at [https://hub.docker.com/repository/docker/jsoneventsourcing/pincette-jes-http](https://hub.docker.com/repository/docker/jsoneventsourcing/pincette-jes-http). They expose port 9000. You can either use environment variables to configure them or add a configuration layer with a Docker file that looks like this:
 
 ```
-FROM registry.hub.docker.com/wdonne/pincette-jes-http:<version>
+FROM registry.hub.docker.com/jsoneventsourcing/pincette-jes-http:<version>
 COPY conf/tst.conf /conf/application.conf
 ```
 

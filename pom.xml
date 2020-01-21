@@ -9,7 +9,7 @@
   <version>1.1.4</version>
   <name>pincette-jes-http</name>
   <description>HTTP Server For JSON Event Sourcing</description>
-  <url>https://github.com/wdonne/pincette-jes-http</url>
+  <url>https://github.com/json-event-sourcing/pincette-jes-http</url>
 
   <organization>
     <name>Pincette</name>
@@ -17,9 +17,9 @@
   </organization>
 
   <scm>
-    <url>https://github.com/wdonne/pincette-jes-http</url>
-    <connection>scm:git@github.com:wdonne/pincette-jes-http.git</connection>
-    <developerConnection>scm:git@github.com:wdonne/pincette-jes-http.git</developerConnection>
+    <url>https://github.com/json-event-sourcing/pincette-jes-http</url>
+    <connection>scm:git@github.com:json-event-sourcing/pincette-jes-http.git</connection>
+    <developerConnection>scm:git@github.com:json-event-sourcing/pincette-jes-http.git</developerConnection>
   </scm>
 
   <developers>
@@ -143,7 +143,7 @@
         <version>1.8.0</version>
         <configuration>
           <to>
-            <image>registry.hub.docker.com/wdonne/${project.name}</image>
+            <image>registry.hub.docker.com/jsoneventsourcing/${project.name}</image>
             <tags>
               <tag>${project.version}</tag>
               <tag>latest</tag>
