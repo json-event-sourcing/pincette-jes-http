@@ -16,7 +16,7 @@ jobs:
     - name: Build with Maven
       run: mvn compile jib:build --file pom.xml
 
-prepare-nonprod-config-repo:
+  prepare-nonprod-config-repo:
     needs: [build]
     runs-on: ubuntu-latest
 
