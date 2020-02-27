@@ -12,13 +12,13 @@ import static java.util.Arrays.stream;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static java.util.logging.Level.SEVERE;
 import static java.util.logging.Level.parse;
-import static java.util.logging.Logger.getGlobal;
 import static java.util.logging.Logger.getLogger;
 import static java.util.stream.Collectors.joining;
 import static java.util.stream.Collectors.toMap;
 import static javax.json.Json.createReader;
 import static net.pincette.jes.elastic.Logging.log;
 import static net.pincette.jes.util.Configuration.loadDefault;
+import static net.pincette.jes.util.Kafka.createReliableProducer;
 import static net.pincette.jes.util.Kafka.fromConfig;
 import static net.pincette.rs.Chain.with;
 import static net.pincette.rs.Util.empty;
@@ -48,11 +48,13 @@ import net.pincette.function.SideEffect;
 import net.pincette.jes.api.Request;
 import net.pincette.jes.api.Response;
 import net.pincette.jes.api.Server;
+import net.pincette.jes.util.JsonSerializer;
 import net.pincette.json.JsonUtil;
 import net.pincette.netty.http.HttpServer;
 import net.pincette.rs.Util;
 import net.pincette.util.Array;
 import net.pincette.util.Util.GeneralException;
+import org.apache.kafka.common.serialization.StringSerializer;
 import org.reactivestreams.Publisher;
 
 /**
@@ -62,8 +64,6 @@ import org.reactivestreams.Publisher;
  * @since 1.0
  */
 public class ApiServer {
-  private static final String AUTHORIZATION_HEADER = "elastic.log.authorizationHeader";
-  private static final String AUTHORIZATION_HEADER_ENV = "ELASTIC_LOG_AUTHORIZATION_HEADER";
   private static final String CONTEXT_PATH = "contextPath";
   private static final String CONTEXT_PATH_ENV = "CONTEXT_PATH";
   private static final String ENVIRONMENT = "environment";
@@ -78,25 +78,24 @@ public class ApiServer {
   private static final String KAFKA_PREFIX = "KAFKA_";
   private static final String LOG_LEVEL = "logLevel";
   private static final String LOG_LEVEL_ENV = "LOG_LEVEL";
+  private static final String LOG_TOPIC = "logTopic";
+  private static final String LOG_TOPIC_ENV = "LOG_TOPIC";
   private static final String MONGODB_DATABASE = "mongodb.database";
   private static final String MONGODB_DATABASE_ENV = "MONGODB_DATABASE";
   private static final String MONGODB_URI = "mongodb.uri";
   private static final String MONGODB_URI_ENV = "MONGODB_URI";
-  private static final String URI_FIELD = "elastic.log.uri";
-  private static final String URI_FIELD_ENV = "ELASTIC_LOG_URI";
-  private static final String VERSION = "1.1.4";
+  private static final String VERSION = "1.2";
   private static final Map<String, String> ENV_MAP =
       map(
-          pair(AUTHORIZATION_HEADER, AUTHORIZATION_HEADER_ENV),
           pair(CONTEXT_PATH, CONTEXT_PATH_ENV),
           pair(ENVIRONMENT, ENVIRONMENT_ENV),
           pair(FANOUT_SECRET, FANOUT_SECRET_ENV),
           pair(FANOUT_URI, FANOUT_URI_ENV),
           pair(JWT_PUBLIC_KEY, JWT_PUBLIC_KEY_ENV),
           pair(LOG_LEVEL, LOG_LEVEL_ENV),
+          pair(LOG_TOPIC, LOG_TOPIC_ENV),
           pair(MONGODB_DATABASE, MONGODB_DATABASE_ENV),
-          pair(MONGODB_URI, MONGODB_URI_ENV),
-          pair(URI_FIELD, URI_FIELD_ENV));
+          pair(MONGODB_URI, MONGODB_URI_ENV));
 
   private static Optional<String> configEntry(final Config config, final String path) {
     return Optional.ofNullable(ENV_MAP.get(path))
@@ -158,20 +157,21 @@ public class ApiServer {
     final Config config = loadDefault();
     final String contextPath = configEntry(config, CONTEXT_PATH).orElse("");
     final String environment = configEntry(config, ENVIRONMENT).orElse("dev");
+    final Map<String, Object> kafkaConfig = kafkaConfig(config);
     final Level logLevel = parse(configEntry(config, LOG_LEVEL).orElse("INFO"));
+    final String logTopic = configEntry(config, LOG_TOPIC).orElse(null);
     final Logger logger = getLogger("pincette-jes-http");
 
     logger.setLevel(logLevel);
 
-    if (configEntry(config, AUTHORIZATION_HEADER).isPresent()
-        && configEntry(config, URI_FIELD).isPresent()) {
+    if (logTopic != null) {
       log(
           logger,
           logLevel,
           VERSION,
           environment,
-          configEntry(config, URI_FIELD).orElse(null),
-          configEntry(config, AUTHORIZATION_HEADER).orElse(null));
+          createReliableProducer(kafkaConfig, new StringSerializer(), new JsonSerializer()),
+          logTopic);
     }
 
     tryToDoWithRethrow(
@@ -180,13 +180,15 @@ public class ApiServer {
                 new Server()
                     .withContextPath(contextPath)
                     .withEnvironment(environment)
+                    .withServiceVersion(VERSION)
                     .withAudit("audit-" + environment)
                     .withBreakingTheGlass()
                     .withJwtPublicKey(configEntryMust(config, JWT_PUBLIC_KEY))
-                    .withKafkaConfig(kafkaConfig(config))
+                    .withKafkaConfig(kafkaConfig)
                     .withMongoUri(configEntryMust(config, MONGODB_URI))
                     .withMongoDatabase(configEntryMust(config, MONGODB_DATABASE))
-                    .withLogger(logger),
+                    .withLogger(logger)
+                    .withLogTopic(logTopic),
                 config),
         server ->
             tryToDoWithRethrow(
@@ -196,15 +198,16 @@ public class ApiServer {
                         (HttpRequest req, InputStream body, HttpResponse resp) ->
                             isHealthCheck(req, contextPath)
                                 ? health(resp)
-                                : requestHandler(req, body, resp, server)),
-                ApiServer::start));
+                                : requestHandler(req, body, resp, server, logger)),
+                s -> start(s, logger)));
   }
 
   private static CompletionStage<Publisher<ByteBuf>> requestHandler(
       final HttpRequest request,
       final InputStream body,
       final HttpResponse response,
-      final Server server) {
+      final Server server,
+      final Logger logger) {
     return toRequest(request)
         .map(r -> r.withBody(tryToGetSilent(() -> createReader(body).read()).orElse(null)))
         .map(r -> pair(server.returnsMultiple(r), server.request(r)))
@@ -216,7 +219,7 @@ public class ApiServer {
                         t ->
                             SideEffect.<Publisher<ByteBuf>>run(
                                     () -> {
-                                      getGlobal().log(SEVERE, "", t);
+                                      logger.log(SEVERE, "", t);
                                       response.setStatus(INTERNAL_SERVER_ERROR);
                                     })
                                 .andThenGet(Util::empty)))
@@ -235,10 +238,10 @@ public class ApiServer {
         .orElse(server);
   }
 
-  private static void start(final HttpServer server) {
-    getGlobal().info("Ready");
+  private static void start(final HttpServer server, final Logger logger) {
+    logger.info("Ready");
     server.start();
-    getGlobal().info("Done");
+    logger.info("Done");
   }
 
   private static Map<String, String[]> toHeaders(final HttpHeaders headers) {
@@ -251,6 +254,7 @@ public class ApiServer {
         .map(
             uri ->
                 new Request()
+                    .withUri(request.uri())
                     .withMethod(request.method().name())
                     .withHeaders(toHeaders(request.headers()))
                     .withPath(uri.getPath())

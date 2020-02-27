@@ -22,14 +22,13 @@ The configuration is managed by the [Lightbend Config package](https://github.co
 |Entry|Envvar|Mandatory|Default|Description|
 |---|---|---|---|---|
 |contextPath|CONTEXT_PATH|No|/api|The URL path prefix.|
-|elastic.log.authorizationHeader|ELASTIC_LOG_AUTHORIZATION_HEADER|Only when ELASTIC_LOG_URI is present|None|The value for the HTTP Authorization header, which uses the basic realm.|
-|elastic.log.uri|ELASTIC_LOG_URI|No|None|The URI for upload of an Elasticsearch index. Its path would be ```/<index_name>/_doc```. The index "log" is currently used.|
 |environment|ENVIRONMENT|No|dev|The name of the environment, which will be used as a suffix for the aggregates, e.g. "tst", "acc", etc.|
 |fanout.uri|FANOUT_URI|No|None|The URL of the [fanout.io](https://fanout.io) service.|
 |fanout.secret|FANOUT_SECRET|None|Only when FANOUT_URI is present|The secret with which the usernames are encrypted during the Server-Sent Events set-up.|
 |jwtPublicKey|JWT_PUBLIC_KEY|Yes|None|The public key string, which is used to validate all JSON Web Tokens.|
 |kafka|KAFKA_\*|No|localhost:9092|All Kafka settings come below this entry. So for example, the setting ```bootstrap.servers``` would go to the entry ```kafka.bootstrap.servers```. The equivalent environment variable would then be "KAFKA_BOOTSTRAP_SERVERS".|
 |logLevel|LOG_LEVEL|No|INFO|The log level as defined in [java.util.logging.Level](https://docs.oracle.com/javase/8/docs/api/java/util/logging/Level.html).|
+|logTopic|LOG_TOPIC|No|log-dev|The Kafka topic where the requests will be logged in the [Elastic Common Schema](https://www.elastic.co/guide/en/ecs/current/index.html).|
 |mongodb.database|MONGODB_DATABASE|No|es|The name of the MongoDB database.|
 |mongodb.uri|MONGODB_URI|No|mongodb://localhost:27017|The URI of the MongoDB service.|
 
