@@ -15,11 +15,11 @@ import static java.util.logging.Level.parse;
 import static java.util.logging.Logger.getLogger;
 import static java.util.stream.Collectors.joining;
 import static java.util.stream.Collectors.toMap;
-import static javax.json.Json.createReader;
 import static net.pincette.jes.elastic.Logging.log;
 import static net.pincette.jes.util.Configuration.loadDefault;
 import static net.pincette.jes.util.Kafka.createReliableProducer;
 import static net.pincette.jes.util.Kafka.fromConfig;
+import static net.pincette.json.JsonUtil.createReader;
 import static net.pincette.rs.Chain.with;
 import static net.pincette.rs.Util.empty;
 import static net.pincette.util.Collections.list;
@@ -84,7 +84,7 @@ public class ApiServer {
   private static final String MONGODB_DATABASE_ENV = "MONGODB_DATABASE";
   private static final String MONGODB_URI = "mongodb.uri";
   private static final String MONGODB_URI_ENV = "MONGODB_URI";
-  private static final String VERSION = "1.2";
+  private static final String VERSION = "1.2.1";
   private static final Map<String, String> ENV_MAP =
       map(
           pair(CONTEXT_PATH, CONTEXT_PATH_ENV),
