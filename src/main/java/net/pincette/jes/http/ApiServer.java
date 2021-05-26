@@ -31,7 +31,6 @@ import static net.pincette.util.Util.tryToGetSilent;
 
 import com.typesafe.config.Config;
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
@@ -50,6 +49,7 @@ import net.pincette.jes.api.Response;
 import net.pincette.jes.api.Server;
 import net.pincette.jes.util.JsonSerializer;
 import net.pincette.json.JsonUtil;
+import net.pincette.netty.http.BufferedProcessor;
 import net.pincette.netty.http.HttpServer;
 import net.pincette.rs.Util;
 import net.pincette.util.Array;
@@ -84,7 +84,7 @@ public class ApiServer {
   private static final String MONGODB_DATABASE_ENV = "MONGODB_DATABASE";
   private static final String MONGODB_URI = "mongodb.uri";
   private static final String MONGODB_URI_ENV = "MONGODB_URI";
-  private static final String VERSION = "1.2.1";
+  private static final String VERSION = "1.2.3";
   private static final Map<String, String> ENV_MAP =
       map(
           pair(CONTEXT_PATH, CONTEXT_PATH_ENV),
@@ -273,6 +273,6 @@ public class ApiServer {
     return Optional.ofNullable(r1.body)
         .map(body -> with(body).map(JsonUtil::string))
         .map(chain -> returnsMultiple ? chain.separate(",").before("[").after("]") : chain)
-        .map(chain -> chain.map(s -> s.getBytes(UTF_8)).map(Unpooled::wrappedBuffer).get());
+        .map(chain -> chain.map(s -> s.getBytes(UTF_8)).map(new BufferedProcessor(0xffff)).get());
   }
 }
