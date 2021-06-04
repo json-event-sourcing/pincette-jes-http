@@ -6,7 +6,7 @@
 
   <groupId>net.pincette</groupId>
   <artifactId>pincette-jes-http</artifactId>
-  <version>1.2.3</version>
+  <version>1.2.4</version>
   <name>pincette-jes-http</name>
   <description>HTTP Server For JSON Event Sourcing</description>
   <url>https://github.com/json-event-sourcing/pincette-jes-http</url>
@@ -19,7 +19,8 @@
   <scm>
     <url>https://github.com/json-event-sourcing/pincette-jes-http</url>
     <connection>scm:git@github.com:json-event-sourcing/pincette-jes-http.git</connection>
-    <developerConnection>scm:git@github.com:json-event-sourcing/pincette-jes-http.git</developerConnection>
+    <developerConnection>scm:git@github.com:json-event-sourcing/pincette-jes-http.git
+    </developerConnection>
   </scm>
 
   <developers>
@@ -45,13 +46,16 @@
     <maven.compiler.target>1.8</maven.compiler.target>
     <maven.compiler.source>1.8</maven.compiler.source>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <sonar.projectKey>json-event-sourcing_pincette-jes-http</sonar.projectKey>
+    <sonar.organization>json-event-sourcing</sonar.organization>
+    <sonar.host.url>https://sonarcloud.io</sonar.host.url>
   </properties>
 
   <dependencies>
     <dependency>
       <groupId>net.pincette</groupId>
       <artifactId>pincette-common</artifactId>
-      <version>1.8</version>
+      <version>1.8.1</version>
     </dependency>
     <dependency>
       <groupId>net.pincette</groupId>
@@ -61,7 +65,7 @@
     <dependency>
       <groupId>net.pincette</groupId>
       <artifactId>pincette-netty-http</artifactId>
-      <version>1.2</version>
+      <version>1.2.1</version>
     </dependency>
     <dependency>
       <groupId>net.pincette</groupId>
