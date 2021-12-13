@@ -6,7 +6,7 @@
 
   <groupId>net.pincette</groupId>
   <artifactId>pincette-jes-http</artifactId>
-  <version>1.2.5</version>
+  <version>1.2.6</version>
   <name>pincette-jes-http</name>
   <description>HTTP Server For JSON Event Sourcing</description>
   <url>https://github.com/json-event-sourcing/pincette-jes-http</url>
@@ -60,27 +60,27 @@
     <dependency>
       <groupId>net.pincette</groupId>
       <artifactId>pincette-jes-api</artifactId>
-      <version>2.0.1</version>
+      <version>2.0.2</version>
     </dependency>
     <dependency>
       <groupId>net.pincette</groupId>
       <artifactId>pincette-netty-http</artifactId>
-      <version>2.0</version>
+      <version>2.0.1</version>
     </dependency>
     <dependency>
       <groupId>net.pincette</groupId>
       <artifactId>pincette-jes-util</artifactId>
-      <version>2.0</version>
+      <version>2.0.1</version>
     </dependency>
     <dependency>
       <groupId>net.pincette</groupId>
       <artifactId>pincette-jes-elastic</artifactId>
-      <version>2.0</version>
+      <version>2.0.2</version>
     </dependency>
     <dependency>
       <groupId>net.pincette</groupId>
       <artifactId>pincette-rs</artifactId>
-      <version>2.0</version>
+      <version>2.0.1</version>
     </dependency>
     <dependency>
       <groupId>net.pincette</groupId>
@@ -105,7 +105,7 @@
     <dependency>
       <groupId>org.apache.logging.log4j</groupId>
       <artifactId>log4j</artifactId>
-      <version>2.14.1</version>
+      <version>2.15.0</version>
       <type>pom</type>
     </dependency>
   </dependencies>
