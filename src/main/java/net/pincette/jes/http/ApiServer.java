@@ -84,7 +84,7 @@ public class ApiServer {
   private static final String MONGODB_DATABASE_ENV = "MONGODB_DATABASE";
   private static final String MONGODB_URI = "mongodb.uri";
   private static final String MONGODB_URI_ENV = "MONGODB_URI";
-  private static final String VERSION = "1.2.3";
+  private static final String VERSION = "1.2.8";
   private static final Map<String, String> ENV_MAP =
       map(
           pair(CONTEXT_PATH, CONTEXT_PATH_ENV),
