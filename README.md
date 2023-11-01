@@ -5,7 +5,7 @@ aggregates](https://github.com/json-event-sourcing/pincette-jes). On the write-s
 commands, which are handled asynchronously. They are put on a [Kafka](https://kafka.apache.org)
 command topic, which corresponds to the aggregate type in the [command](https://github.com/json-event-sourcing/pincette-jes). This is acknowledged with a 202 HTTP status code (Accepted). Changes to aggregates come back through [Server-Sent Events](https://www.w3.org/TR/eventsource/). This flow fits well with reactive clients.
 
-The read-side is handled with [MongoDB](https://www.mongodb.com). You can fetch, list and search aggregates.
+The read-side is handled with [MongoDB](https://www.mongodb.com). You can fetch and search aggregates.
 
 The supported paths and methods are explained in the repository [pincette-jes-api](https://github.com/json-event-sourcing/pincette-jes-api).
 
@@ -13,7 +13,7 @@ One special path is `<contextPath>/health`, which just returns status code 200 (
 
 ## Authentication
 
-All requests should have a [JSON Web Token](https://jwt.io), which may appear as a bearer token in the `Authotrization` header, the cookie named `access_token` or the URL parameter named `access_token`. The configuration should have the public key with which the tokens can be validated.
+All requests should have a [JSON Web Token](https://jwt.io), which may appear as a bearer token in the `Authotrization` header or the cookie named `access_token`. The configuration should have the public key with which the tokens can be validated.
 
 ## Configuration
 
@@ -21,16 +21,38 @@ The configuration is managed by the [Lightbend Config package](https://github.co
 
 |Entry|Envvar|Mandatory|Default|Description|
 |---|---|---|---|---|
+|accessLog|ACCESS_LOG|No|false|A boolean indicating if access log entries should be sent to the log topic, which should be set.|
 |contextPath|CONTEXT_PATH|No|/api|The URL path prefix.|
-|environment|ENVIRONMENT|No|dev|The name of the environment, which will be used as a suffix for the aggregates, e.g. `tst`, `acc`, etc.|
+|environment|ENVIRONMENT|No|None|The name of the environment, which will be used as a suffix for the aggregates, e.g. `tst`, `acc`, etc.|
 |fanout.uri|FANOUT_URI|No|None|The URL of the [fanout.io](https://fanout.io) service.|
-|fanout.secret|FANOUT_SECRET|None|Only when FANOUT_URI is present|The secret with which the usernames are encrypted during the Server-Sent Events set-up.|
+|fanout.privateKey|FANOUT_PRIVATE_KEY|Only when FANOUT_URI is present|None|The private key in PEM format with which the usernames are signed during the Server-Sent Events set-up.|
+|fanout.publicKey|FANOUT_PUBLIC_KEY|Only when FANOUT_URI is present|None|The public key in PEM format with which the usernames are verified during the Server-Sent Events set-up.|
 |jwtPublicKey|JWT_PUBLIC_KEY|Yes|None|The public key string, which is used to validate all JSON Web Tokens.|
 |kafka|KAFKA_*|No|localhost:9092|All Kafka settings come below this entry. So for example, the setting `bootstrap.servers` would go to the entry `kafka.bootstrap.servers`. The equivalent environment variable would then be `KAFKA_BOOTSTRAP_SERVERS`.|
 |logLevel|LOG_LEVEL|No|INFO|The log level as defined in [java.util.logging.Level](https://docs.oracle.com/javase/8/docs/api/java/util/logging/Level.html).|
-|logTopic|LOG_TOPIC|No|log-dev|The Kafka topic where the requests will be logged in the [Elastic Common Schema](https://www.elastic.co/guide/en/ecs/current/index.html).|
+|logTopic|LOG_TOPIC|No|None|The Kafka topic where the log entries are sent to in the [Elastic Common Schema](https://www.elastic.co/guide/en/ecs/current/index.html).|
+|metricsTopic|METRICS_TOPIC|No|None|The Kafka topic where the metrics entries are sent to in JSON. They are per minute and per aggregate/HTTP method.|
 |mongodb.database|MONGODB_DATABASE|No|es|The name of the MongoDB database.|
 |mongodb.uri|MONGODB_URI|No|mongodb://localhost:27017|The URI of the MongoDB service.|
+
+## Metrics
+
+If the `metricsTopic` configration entry is set, metrics messages are sent to it for every aggregate/HTTP method combination. This happens every minute. The messages look like this (the time is in milliseconds):
+
+```json
+{
+  "aggregate": "my_aggregate",
+  "method": "GET",
+  "minute": "2023-11-01T17:23:00Z",
+  "requestCount": 245,
+  "requestBytes": 2786,
+  "responseBytes": 32152,
+  "timeSpent": 12250,
+  "averageRequestBytes": 11,
+  "averageResponseBytes": 131,
+  "averageTimeSpent": 50  
+}
+```
 
 ## Building and Running
 
@@ -48,3 +70,7 @@ COPY conf/tst.conf /conf/application.conf
 ```
 
 So wherever your configuration file comes from, it should always end up at ```/conf/application.conf```.
+
+## Kubernetes
+
+You can mount the configuration in a `ConfigMap` and `Secret` combination. The `ConfigMap` should be mounted at `/conf/application.conf`. You then include the secret in the configuration from where you have mounted it. See also [https://github.com/lightbend/config/blob/main/HOCON.md#include-syntax](https://github.com/lightbend/config/blob/main/HOCON.md#include-syntax).
