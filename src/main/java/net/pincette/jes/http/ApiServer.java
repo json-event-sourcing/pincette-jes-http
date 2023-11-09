@@ -138,7 +138,7 @@ public class ApiServer {
   private static final String MONGODB_URI = "mongodb.uri";
   private static final String MONGODB_URI_ENV = "MONGODB_URI";
   private static final String SSE_SETUP = "sse-setup";
-  private static final String VERSION = "2.0";
+  private static final String VERSION = "2.0.2";
   private static final Map<String, String> ENV_MAP =
       map(
           pair(ACCESS_LOG, ACCESS_LOG_ENV),
