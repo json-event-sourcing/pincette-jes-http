@@ -12,7 +12,6 @@ import static java.time.Duration.ofMillis;
 import static java.time.Instant.now;
 import static java.time.temporal.ChronoUnit.MINUTES;
 import static java.util.Arrays.stream;
-import static java.util.Objects.requireNonNull;
 import static java.util.Optional.ofNullable;
 import static java.util.UUID.randomUUID;
 import static java.util.concurrent.CompletableFuture.completedFuture;
@@ -31,7 +30,6 @@ import static net.pincette.json.JsonUtil.createObjectBuilder;
 import static net.pincette.json.JsonUtil.createReader;
 import static net.pincette.netty.http.Dispatcher.when;
 import static net.pincette.netty.http.HttpServer.accumulate;
-import static net.pincette.netty.http.JWTVerifier.verify;
 import static net.pincette.netty.http.PipelineHandler.handle;
 import static net.pincette.netty.http.Util.wrapMetrics;
 import static net.pincette.rs.Chain.with;
@@ -86,6 +84,7 @@ import net.pincette.kafka.json.JsonSerializer;
 import net.pincette.netty.http.BufferedProcessor;
 import net.pincette.netty.http.HeaderHandler;
 import net.pincette.netty.http.HttpServer;
+import net.pincette.netty.http.JWTVerifier;
 import net.pincette.netty.http.Metrics;
 import net.pincette.netty.http.RequestHandler;
 import net.pincette.rs.DequePublisher;
@@ -138,7 +137,7 @@ public class ApiServer {
   private static final String MONGODB_URI = "mongodb.uri";
   private static final String MONGODB_URI_ENV = "MONGODB_URI";
   private static final String SSE_SETUP = "sse-setup";
-  private static final String VERSION = "2.0.2";
+  private static final String VERSION = "2.0.3";
   private static final Map<String, String> ENV_MAP =
       map(
           pair(ACCESS_LOG, ACCESS_LOG_ENV),
@@ -292,6 +291,10 @@ public class ApiServer {
             });
   }
 
+  private static HeaderHandler headerHandler(final Config config) {
+    return configEntry(config, JWT_PUBLIC_KEY).map(JWTVerifier::verify).orElse(h -> h);
+  }
+
   private static RequestHandler health() {
     return (request, requestBody, response) -> {
       response.setStatus(OK);
@@ -318,10 +321,6 @@ public class ApiServer {
 
   private static boolean isSseSetup(final HttpRequest req, final String contextPath) {
     return isPath(req, SSE_SETUP, contextPath);
-  }
-
-  private static HeaderHandler jwtVerifier(final Config config) {
-    return verify(requireNonNull(configEntry(config, JWT_PUBLIC_KEY).orElse(null)));
   }
 
   private static Map<String, Object> kafkaConfig(final Config config) {
@@ -418,7 +417,7 @@ public class ApiServer {
                             parseInt(args[0]),
                             when(request -> isHealthCheck(request, contextPath), health())
                                 .or(request -> isSseSetup(request, contextPath), requestHandler)
-                                .orElse(handle(jwtVerifier(config)).finishWith(requestHandler))),
+                                .orElse(handle(headerHandler(config)).finishWith(requestHandler))),
                     s -> start(s, logger));
               });
         });

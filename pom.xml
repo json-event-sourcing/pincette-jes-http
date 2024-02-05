@@ -6,7 +6,7 @@
 
   <groupId>net.pincette</groupId>
   <artifactId>pincette-jes-http</artifactId>
-  <version>2.0.2</version>
+  <version>2.0.3</version>
   <name>pincette-jes-http</name>
   <description>HTTP Server For JSON Event Sourcing</description>
   <url>https://github.com/json-event-sourcing/pincette-jes-http</url>
@@ -53,7 +53,7 @@
       <dependency>
         <groupId>software.amazon.awssdk</groupId>
         <artifactId>bom</artifactId>
-        <version>2.21.19</version>
+        <version>2.23.15</version>
         <type>pom</type>
         <scope>import</scope>
       </dependency>
@@ -69,7 +69,7 @@
     <dependency>
       <groupId>net.pincette</groupId>
       <artifactId>pincette-jes-api</artifactId>
-      <version>3.0.1</version>
+      <version>3.0.2</version>
     </dependency>
     <dependency>
       <groupId>net.pincette</groupId>
@@ -79,7 +79,7 @@
     <dependency>
       <groupId>net.pincette</groupId>
       <artifactId>pincette-jes-util</artifactId>
-      <version>3.1.11</version>
+      <version>3.1.12</version>
     </dependency>
     <dependency>
       <groupId>net.pincette</groupId>
@@ -109,12 +109,12 @@
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-log4j12</artifactId>
-      <version>2.0.9</version>
+      <version>2.0.11</version>
     </dependency>
     <dependency>
       <groupId>org.apache.logging.log4j</groupId>
       <artifactId>log4j</artifactId>
-      <version>2.21.1</version>
+      <version>2.22.1</version>
       <type>pom</type>
     </dependency>
     <dependency>
@@ -170,7 +170,9 @@
             <image>registry.hub.docker.com/jsoneventsourcing/${project.name}</image>
             <tags>
               <tag>${project.version}</tag>
+              <!--
               <tag>${env.GITHUB_SHA}</tag>
+              -->
               <tag>latest</tag>
             </tags>
           </to>
@@ -183,6 +185,7 @@
               <port>9000</port>
             </ports>
             <workingDirectory>/</workingDirectory>
+            <user>1000:1000</user>
           </container>
         </configuration>
       </plugin>
