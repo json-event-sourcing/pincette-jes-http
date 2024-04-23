@@ -34,6 +34,7 @@ The configuration is managed by the [Lightbend Config package](https://github.co
 |metricsTopic|METRICS_TOPIC|No|None|The Kafka topic where the metrics entries are sent to in JSON. They are per minute and per aggregate/HTTP method.|
 |mongodb.database|MONGODB_DATABASE|No|es|The name of the MongoDB database.|
 |mongodb.uri|MONGODB_URI|No|mongodb://localhost:27017|The URI of the MongoDB service.|
+|whoami|WHOAMI|No|None|An array of fields that are extracted from the JWT and put in a JSON object that becomes the value of the `whoami` cookie. The cookie can be used by clients to obtain basic information about the current user.|
 
 ## Metrics
 

@@ -1,5 +1,6 @@
 package net.pincette.jes.http;
 
+import static io.netty.handler.codec.http.HttpHeaderNames.SET_COOKIE;
 import static io.netty.handler.codec.http.HttpMethod.GET;
 import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
 import static io.netty.handler.codec.http.HttpResponseStatus.INTERNAL_SERVER_ERROR;
@@ -7,6 +8,7 @@ import static io.netty.handler.codec.http.HttpResponseStatus.OK;
 import static io.netty.handler.codec.http.HttpResponseStatus.valueOf;
 import static java.lang.Integer.parseInt;
 import static java.lang.System.getenv;
+import static java.net.URLEncoder.encode;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.time.Duration.ofMillis;
 import static java.time.Instant.now;
@@ -28,9 +30,12 @@ import static net.pincette.jes.util.Kafka.fromConfig;
 import static net.pincette.jes.util.Kafka.send;
 import static net.pincette.json.JsonUtil.createObjectBuilder;
 import static net.pincette.json.JsonUtil.createReader;
+import static net.pincette.json.JsonUtil.getValue;
+import static net.pincette.json.JsonUtil.string;
 import static net.pincette.netty.http.Dispatcher.when;
 import static net.pincette.netty.http.HttpServer.accumulate;
 import static net.pincette.netty.http.PipelineHandler.handle;
+import static net.pincette.netty.http.Util.getBearerToken;
 import static net.pincette.netty.http.Util.wrapMetrics;
 import static net.pincette.rs.Chain.with;
 import static net.pincette.rs.Filter.filter;
@@ -42,8 +47,11 @@ import static net.pincette.rs.Util.empty;
 import static net.pincette.rs.Util.tap;
 import static net.pincette.util.Collections.list;
 import static net.pincette.util.Collections.map;
+import static net.pincette.util.Collections.merge;
 import static net.pincette.util.Or.tryWith;
 import static net.pincette.util.Pair.pair;
+import static net.pincette.util.Triple.triple;
+import static net.pincette.util.Util.getLastSegment;
 import static net.pincette.util.Util.must;
 import static net.pincette.util.Util.tryToDoWithRethrow;
 import static net.pincette.util.Util.tryToGetRethrow;
@@ -58,8 +66,10 @@ import java.io.InputStream;
 import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Objects;
@@ -112,6 +122,8 @@ public class ApiServer {
   private static final String CLIENT_ID = "client.id";
   private static final String CONTEXT_PATH = "contextPath";
   private static final String CONTEXT_PATH_ENV = "CONTEXT_PATH";
+  private static final String DOMAIN = "domain";
+  private static final String DOMAIN_ENV = "DOMAIN";
   private static final String ENVIRONMENT = "environment";
   private static final String ENVIRONMENT_ENV = "ENVIRONMENT";
   private static final String FANOUT_PRIVATE_KEY = "fanout.privateKey";
@@ -137,11 +149,14 @@ public class ApiServer {
   private static final String MONGODB_URI = "mongodb.uri";
   private static final String MONGODB_URI_ENV = "MONGODB_URI";
   private static final String SSE_SETUP = "sse-setup";
-  private static final String VERSION = "2.0.3";
+  private static final String VERSION = "2.1.0";
+  private static final String WHOAMI = "whoami";
+  private static final String WHOAMI_ENV = "WHOAMI";
   private static final Map<String, String> ENV_MAP =
       map(
           pair(ACCESS_LOG, ACCESS_LOG_ENV),
           pair(CONTEXT_PATH, CONTEXT_PATH_ENV),
+          pair(DOMAIN, DOMAIN_ENV),
           pair(ENVIRONMENT, ENVIRONMENT_ENV),
           pair(FANOUT_PRIVATE_KEY, FANOUT_PRIVATE_KEY_ENV),
           pair(FANOUT_PUBLIC_KEY, FANOUT_PUBLIC_KEY_ENV),
@@ -151,7 +166,8 @@ public class ApiServer {
           pair(LOG_TOPIC, LOG_TOPIC_ENV),
           pair(METRICS_TOPIC, METRICS_TOPIC_ENV),
           pair(MONGODB_DATABASE, MONGODB_DATABASE_ENV),
-          pair(MONGODB_URI, MONGODB_URI_ENV));
+          pair(MONGODB_URI, MONGODB_URI_ENV),
+          pair(WHOAMI, WHOAMI_ENV));
 
   private static String aggregate(final String path, final String contextPath) {
     return new Href(realPath(path, contextPath)).type;
@@ -173,6 +189,15 @@ public class ApiServer {
   private static String configEntryMust(final Config config, final String path) {
     return configEntry(config, path)
         .orElseThrow(() -> new GeneralException("Missing configuration entry " + path));
+  }
+
+  private static Optional<List<String>> configEntryStringList(
+      final Config config, final String path) {
+    return ofNullable(ENV_MAP.get(path))
+        .map(System::getenv)
+        .map(value -> value.split("[, ]"))
+        .map(Arrays::asList)
+        .or(() -> tryToGetSilent(() -> config.getStringList(path)));
   }
 
   private static void copyHeaders(final Response r1, final HttpResponse r2) {
@@ -270,10 +295,15 @@ public class ApiServer {
       final InputStream body,
       final HttpResponse response,
       final Server server,
-      final Logger logger) {
+      final Logger logger,
+      final Config config) {
     return toRequest(request)
         .map(r -> r.withBody(tryToGetSilent(() -> createReader(body).read()).orElse(null)))
-        .map(r -> pair(server.returnsMultiple(r), server.request(r)))
+        .map(
+            r ->
+                pair(
+                    server.returnsMultiple(r),
+                    server.request(r).thenApply(resp -> whoami(request, resp, config))))
         .map(
             pair ->
                 pair.second
@@ -457,7 +487,8 @@ public class ApiServer {
   private static RequestHandler requestHandler(
       final Server server, final Config config, final Logger logger) {
     return accumulate(
-        (req, body, resp) -> handleRequest(req, body, resp, setFanout(server, config), logger));
+        (req, body, resp) ->
+            handleRequest(req, body, resp, setFanout(server, config), logger, config));
   }
 
   private static void sendToKafka(
@@ -475,6 +506,11 @@ public class ApiServer {
                         .thenAccept(r -> {}),
                 () -> {},
                 e -> logException(logger, e)));
+  }
+
+  private static Map<String, String[]> setCookie(
+      final Map<String, String[]> headers, final String name, final String value) {
+    return merge(headers, map(pair(SET_COOKIE.toString(), new String[] {name + "=" + value})));
   }
 
   private static Server setFanout(final Server server, final Config config) {
@@ -524,6 +560,36 @@ public class ApiServer {
         .map(body -> with(body).map(JsonUtil::string))
         .map(chain -> returnsMultiple ? chain.separate(",").before("[").after("]") : chain)
         .map(chain -> chain.map(s -> s.getBytes(UTF_8)).map(new BufferedProcessor(0xffff)).get());
+  }
+
+  private static Response whoami(
+      final HttpRequest request, final Response response, final Config config) {
+    return configEntryStringList(config, WHOAMI)
+        .flatMap(fields -> configEntry(config, DOMAIN).map(d -> pair(fields, d)))
+        .flatMap(
+            pair ->
+                getBearerToken(request)
+                    .flatMap(net.pincette.jwt.Util::getJwtPayload)
+                    .map(t -> triple(pair.first, pair.second, t)))
+        .map(
+            triple ->
+                response.withHeaders(
+                    setCookie(
+                        response.headers,
+                        WHOAMI,
+                        encode(string(whoamiFields(triple.third, triple.first)), UTF_8)
+                            + "; Path=/; Domain="
+                            + triple.second)))
+        .orElse(response);
+  }
+
+  private static JsonObject whoamiFields(final JsonObject jwt, final List<String> fields) {
+    return fields.stream()
+        .map(JsonUtil::toJsonPointer)
+        .map(p -> getValue(jwt, p).map(v -> pair(getLastSegment(p, "/").orElse(p), v)).orElse(null))
+        .filter(Objects::nonNull)
+        .reduce(createObjectBuilder(), (b, p) -> b.add(p.first, p.second), (b1, b2) -> b1)
+        .build();
   }
 
   private static Publisher<ProducerRecord<String, JsonObject>> wrapKafka(
