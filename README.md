@@ -17,43 +17,50 @@ All requests should have a [JSON Web Token](https://jwt.io), which may appear as
 
 ## Configuration
 
-The configuration is managed by the [Lightbend Config package](https://github.com/lightbend/config). By default it will try to load `conf/application.conf`. An alternative configuration may be loaded by adding `-Dconfig.resource=myconfig.conf`, where the file is also supposed to be in the `conf` directory. If no configuration file is available it will load a default one from the resources. All configuration entries can be overridden with equivalent environment variables. The following entries are available:
+The configuration is managed by the [Lightbend Config package](https://github.com/lightbend/config). By default it will try to load `conf/application.conf`. An alternative configuration may be loaded by adding `-Dconfig.resource=myconfig.conf`, where the file is also supposed to be in the `conf` directory. If no configuration file is available it will load a default one from the resources. The following entries are available:
 
-|Entry|Envvar|Mandatory|Default|Description|
+|Entry|Mandatory|Default|Description|
 |---|---|---|---|---|
-|accessLog|ACCESS_LOG|No|false|A boolean indicating if access log entries should be sent to the log topic, which should be set.|
-|contextPath|CONTEXT_PATH|No|/api|The URL path prefix.|
-|environment|ENVIRONMENT|No|None|The name of the environment, which will be used as a suffix for the aggregates, e.g. `tst`, `acc`, etc.|
-|fanout.uri|FANOUT_URI|No|None|The URL of the [fanout.io](https://fanout.io) service.|
-|fanout.privateKey|FANOUT_PRIVATE_KEY|Only when FANOUT_URI is present|None|The private key in PEM format with which the usernames are signed during the Server-Sent Events set-up.|
-|fanout.publicKey|FANOUT_PUBLIC_KEY|Only when FANOUT_URI is present|None|The public key in PEM format with which the usernames are verified during the Server-Sent Events set-up.|
-|jwtPublicKey|JWT_PUBLIC_KEY|Yes|None|The public key string, which is used to validate all JSON Web Tokens.|
-|kafka|KAFKA_*|No|localhost:9092|All Kafka settings come below this entry. So for example, the setting `bootstrap.servers` would go to the entry `kafka.bootstrap.servers`. The equivalent environment variable would then be `KAFKA_BOOTSTRAP_SERVERS`.|
-|logLevel|LOG_LEVEL|No|INFO|The log level as defined in [java.util.logging.Level](https://docs.oracle.com/javase/8/docs/api/java/util/logging/Level.html).|
-|logTopic|LOG_TOPIC|No|None|The Kafka topic where the log entries are sent to in the [Elastic Common Schema](https://www.elastic.co/guide/en/ecs/current/index.html).|
-|metricsTopic|METRICS_TOPIC|No|None|The Kafka topic where the metrics entries are sent to in JSON. They are per minute and per aggregate/HTTP method.|
-|mongodb.database|MONGODB_DATABASE|No|es|The name of the MongoDB database.|
-|mongodb.uri|MONGODB_URI|No|mongodb://localhost:27017|The URI of the MongoDB service.|
-|whoami|WHOAMI|No|None|An array of fields that are extracted from the JWT and put in a JSON object that becomes the value of the `whoami` cookie. The cookie can be used by clients to obtain basic information about the current user.|
+|accessLog|No|false|A boolean indicating if access log entries should be sent to the log topic, which should be set.|
+|contextPath|No|/api|The URL path prefix.|
+|environment|No|None|The name of the environment, which will be used as a suffix for the aggregates, e.g. `tst`, `acc`, etc.|
+|fanout.uri|No|None|The URL of the [fanout.io](https://fanout.io) service.|
+|fanout.privateKey|Only when FANOUT_URI is present|None|The private key in PEM format with which the usernames are signed during the Server-Sent Events set-up.|
+|fanout.publicKey|Only when FANOUT_URI is present|None|The public key in PEM format with which the usernames are verified during the Server-Sent Events set-up.|
+|jwtPublicKey|Yes|None|The public key string, which is used to validate all JSON Web Tokens.|
+|kafka|No|localhost:9092|All Kafka settings come below this entry. So for example, the setting `bootstrap.servers` would go to the entry `kafka.bootstrap.servers`. The equivalent environment variable would then be `KAFKA_BOOTSTRAP_SERVERS`.|
+|logLevel|No|INFO|The log level as defined in [java.util.logging.Level](https://docs.oracle.com/javase/8/docs/api/java/util/logging/Level.html).|
+|mongodb.database|No|es|The name of the MongoDB database.|
+|mongodb.uri|No|mongodb://localhost:27017|The URI of the MongoDB service.|
+|namespace|No|jes-http|A name to distinguish several deployments in the same environment.|
+|otlp.grpc|No|None|The OpenTelemetry endpoint for logs and metrics. It should be a URL like `http://localhost:4317`.|
+|slowRequestThreshold|No|None|If this duration is set, then requests that take longer are logged with their request body.|
+|tracesTopic|No|None|The Kafka topic to which event traces are sent.|
+|whoami|No|None|An array of fields that are extracted from the JWT and put in a JSON object that becomes the value of the `whoami` cookie. The cookie can be used by clients to obtain basic information about the current user.|
 
-## Metrics
+## Telemetry
 
-If the `metricsTopic` configration entry is set, metrics messages are sent to it for every aggregate/HTTP method combination. This happens every minute. The messages look like this (the time is in milliseconds):
+A few OpenTelemetry observable counters are emitted every minute. The following table shows the counters.
 
-```json
-{
-  "aggregate": "my_aggregate",
-  "method": "GET",
-  "minute": "2023-11-01T17:23:00Z",
-  "requestCount": 245,
-  "requestBytes": 2786,
-  "responseBytes": 32152,
-  "timeSpent": 12250,
-  "averageRequestBytes": 11,
-  "averageResponseBytes": 131,
-  "averageTimeSpent": 50  
-}
-```
+|Counter|Description|
+|---|---|
+|http.server.average_duration_millis|The average request duration in the measured interval.|
+|http.server.average_request_bytes|The average request body size in bytes in the measured interval.|
+|http.server.average_response_bytes|The average response body size in bytes in the measured interval.|
+|http.server.requests|The number of requests during the measured interval.|
+
+The following attributes are added to the counters.
+
+|Attribute|Description|
+|---|---|
+|aggregate|The name of the aggregate the request was about.|
+|http.request.method|The request method.|
+|http.response.status_code|The status code of the response.|
+|instance|The UUID of the JES HTTP instance.|
+
+The logs are also sent to the OpenTelemetry endpoint.
+
+The event traces are JSON messages, as described in [JSON Streams Telemetry](https://jsonstreams.io/docs/logging.html). They are sent to the Kafka topic set in the `tracesTopic` configuration field.
 
 ## Building and Running
 

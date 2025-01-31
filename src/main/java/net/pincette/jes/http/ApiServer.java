@@ -1,5 +1,6 @@
 package net.pincette.jes.http;
 
+import static com.typesafe.config.ConfigFactory.load;
 import static io.netty.handler.codec.http.HttpHeaderNames.SET_COOKIE;
 import static io.netty.handler.codec.http.HttpMethod.GET;
 import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
@@ -10,27 +11,35 @@ import static java.lang.Integer.parseInt;
 import static java.lang.System.getenv;
 import static java.net.URLEncoder.encode;
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static java.time.Duration.ofMillis;
+import static java.time.Duration.between;
 import static java.time.Instant.now;
-import static java.time.temporal.ChronoUnit.MINUTES;
 import static java.util.Arrays.stream;
 import static java.util.Optional.ofNullable;
 import static java.util.UUID.randomUUID;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static java.util.logging.Level.SEVERE;
-import static java.util.logging.Level.parse;
 import static java.util.logging.Logger.getLogger;
 import static java.util.stream.Collectors.joining;
 import static java.util.stream.Collectors.toMap;
-import static net.pincette.jes.http.AWSSecrets.load;
-import static net.pincette.jes.util.Configuration.loadDefault;
-import static net.pincette.jes.util.Href.isHref;
+import static java.util.stream.Stream.concat;
+import static net.pincette.config.Util.configValue;
+import static net.pincette.jes.Command.isCommand;
+import static net.pincette.jes.JsonFields.COMMAND;
+import static net.pincette.jes.JsonFields.CORR;
+import static net.pincette.jes.JsonFields.SUB;
+import static net.pincette.jes.JsonFields.TYPE;
+import static net.pincette.jes.tel.OtelLogger.warning;
+import static net.pincette.jes.tel.OtelUtil.addOtelLogHandler;
+import static net.pincette.jes.tel.OtelUtil.logRecordProcessor;
+import static net.pincette.jes.tel.OtelUtil.otelLogHandler;
 import static net.pincette.jes.util.Kafka.createReliableProducer;
 import static net.pincette.jes.util.Kafka.fromConfig;
 import static net.pincette.jes.util.Kafka.send;
 import static net.pincette.json.JsonUtil.createObjectBuilder;
 import static net.pincette.json.JsonUtil.createReader;
+import static net.pincette.json.JsonUtil.getString;
 import static net.pincette.json.JsonUtil.getValue;
+import static net.pincette.json.JsonUtil.isObject;
 import static net.pincette.json.JsonUtil.string;
 import static net.pincette.netty.http.Dispatcher.when;
 import static net.pincette.netty.http.HttpServer.accumulate;
@@ -38,13 +47,9 @@ import static net.pincette.netty.http.PipelineHandler.handle;
 import static net.pincette.netty.http.Util.getBearerToken;
 import static net.pincette.netty.http.Util.wrapMetrics;
 import static net.pincette.rs.Chain.with;
-import static net.pincette.rs.Filter.filter;
 import static net.pincette.rs.LambdaSubscriber.lambdaSubscriber;
-import static net.pincette.rs.LambdaSubscriber.lambdaSubscriberAsync;
-import static net.pincette.rs.Mapper.map;
-import static net.pincette.rs.PassThrough.passThrough;
 import static net.pincette.rs.Util.empty;
-import static net.pincette.rs.Util.tap;
+import static net.pincette.rs.Util.onCompleteProcessor;
 import static net.pincette.util.Collections.list;
 import static net.pincette.util.Collections.map;
 import static net.pincette.util.Collections.merge;
@@ -52,7 +57,7 @@ import static net.pincette.util.Or.tryWith;
 import static net.pincette.util.Pair.pair;
 import static net.pincette.util.Triple.triple;
 import static net.pincette.util.Util.getLastSegment;
-import static net.pincette.util.Util.must;
+import static net.pincette.util.Util.initLogging;
 import static net.pincette.util.Util.tryToDoWithRethrow;
 import static net.pincette.util.Util.tryToGetRethrow;
 import static net.pincette.util.Util.tryToGetSilent;
@@ -62,32 +67,30 @@ import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
+import io.opentelemetry.api.common.Attributes;
 import java.io.InputStream;
 import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Arrays;
-import java.util.Deque;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.Flow.Processor;
 import java.util.concurrent.Flow.Publisher;
-import java.util.function.Function;
-import java.util.logging.Level;
+import java.util.concurrent.Flow.Subscriber;
 import java.util.logging.Logger;
 import java.util.stream.Stream;
 import javax.json.JsonObject;
+import javax.json.JsonStructure;
 import net.pincette.function.SideEffect;
 import net.pincette.jes.api.Request;
 import net.pincette.jes.api.Response;
 import net.pincette.jes.api.Server;
-import net.pincette.jes.elastic.ElasticCommonSchema;
-import net.pincette.jes.elastic.LogHandler;
+import net.pincette.jes.tel.EventTrace;
+import net.pincette.jes.tel.HttpMetrics;
+import net.pincette.jes.tel.OtelUtil;
 import net.pincette.jes.util.Href;
 import net.pincette.json.JsonUtil;
 import net.pincette.kafka.json.JsonSerializer;
@@ -97,13 +100,11 @@ import net.pincette.netty.http.HttpServer;
 import net.pincette.netty.http.JWTVerifier;
 import net.pincette.netty.http.Metrics;
 import net.pincette.netty.http.RequestHandler;
-import net.pincette.rs.DequePublisher;
+import net.pincette.rs.Fanout;
 import net.pincette.rs.Merge;
-import net.pincette.rs.Pipe;
 import net.pincette.rs.Util;
 import net.pincette.util.Array;
 import net.pincette.util.Collections;
-import net.pincette.util.Util.GeneralException;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.StringSerializer;
@@ -116,88 +117,61 @@ import org.apache.kafka.common.serialization.StringSerializer;
  */
 public class ApiServer {
   private static final String ACCESS_LOG = "accessLog";
-  private static final String ACCESS_LOG_ENV = "ACCESS_LOG";
-  private static final int BATCH_SIZE = 500;
-  private static final Duration BATCH_TIMEOUT = ofMillis(50);
+  private static final String AGGREGATE = "aggregate";
+  private static final String ANONYMOUS = "anonymous";
   private static final String CLIENT_ID = "client.id";
+  private static final String COMMAND_ATTRIBUTE = "command";
   private static final String CONTEXT_PATH = "contextPath";
-  private static final String CONTEXT_PATH_ENV = "CONTEXT_PATH";
   private static final String DOMAIN = "domain";
-  private static final String DOMAIN_ENV = "DOMAIN";
+  private static final String DURATION = "duration";
   private static final String ENVIRONMENT = "environment";
-  private static final String ENVIRONMENT_ENV = "ENVIRONMENT";
   private static final String FANOUT_PRIVATE_KEY = "fanout.privateKey";
-  private static final String FANOUT_PRIVATE_KEY_ENV = "FANOUT_PRIVATE_KEY";
   private static final String FANOUT_PUBLIC_KEY = "fanout.publicKey";
-  private static final String FANOUT_PUBLIC_KEY_ENV = "FANOUT_PUBLIC_KEY";
   private static final String FANOUT_URI = "fanout.uri";
-  private static final String FANOUT_URI_ENV = "FANOUT_URI";
   private static final String HEALTH_PATH = "health";
+  private static final String HTTP_REQUEST_BODY = "http.request.body";
+  private static final String HTTP_REQUEST_METHOD = "http.request.method";
+  private static final String JES_HTTP = "jes-http";
   private static final String JWT_PUBLIC_KEY = "jwtPublicKey";
-  private static final String JWT_PUBLIC_KEY_ENV = "JWT_PUBLIC_KEY";
   private static final String KAFKA = "kafka";
   private static final String KAFKA_PREFIX = "KAFKA_";
-  private static final String LOGGER = "pincette-jes-http";
-  private static final String LOG_LEVEL = "logLevel";
-  private static final String LOG_LEVEL_ENV = "LOG_LEVEL";
-  private static final String LOG_TOPIC = "logTopic";
-  private static final String LOG_TOPIC_ENV = "LOG_TOPIC";
-  private static final String METRICS_TOPIC = "metricsTopic";
-  private static final String METRICS_TOPIC_ENV = "METRICS_TOPIC";
+  private static final Logger LOGGER = getLogger("net.pincette.jes.http");
   private static final String MONGODB_DATABASE = "mongodb.database";
-  private static final String MONGODB_DATABASE_ENV = "MONGODB_DATABASE";
   private static final String MONGODB_URI = "mongodb.uri";
-  private static final String MONGODB_URI_ENV = "MONGODB_URI";
+  private static final String NAMESPACE = "namespace";
   private static final String SSE_SETUP = "sse-setup";
-  private static final String VERSION = "2.1.0";
+  private static final String SLOW_REQUEST_THRESHOLD = "slowRequestThreshold";
+  private static final String TRACES_TOPIC = "tracesTopic";
+  private static final String URL_PATH = "url.path";
+  private static final String USERNAME = "username";
+  private static final String VERSION = "2.2.0";
   private static final String WHOAMI = "whoami";
-  private static final String WHOAMI_ENV = "WHOAMI";
-  private static final Map<String, String> ENV_MAP =
-      map(
-          pair(ACCESS_LOG, ACCESS_LOG_ENV),
-          pair(CONTEXT_PATH, CONTEXT_PATH_ENV),
-          pair(DOMAIN, DOMAIN_ENV),
-          pair(ENVIRONMENT, ENVIRONMENT_ENV),
-          pair(FANOUT_PRIVATE_KEY, FANOUT_PRIVATE_KEY_ENV),
-          pair(FANOUT_PUBLIC_KEY, FANOUT_PUBLIC_KEY_ENV),
-          pair(FANOUT_URI, FANOUT_URI_ENV),
-          pair(JWT_PUBLIC_KEY, JWT_PUBLIC_KEY_ENV),
-          pair(LOG_LEVEL, LOG_LEVEL_ENV),
-          pair(LOG_TOPIC, LOG_TOPIC_ENV),
-          pair(METRICS_TOPIC, METRICS_TOPIC_ENV),
-          pair(MONGODB_DATABASE, MONGODB_DATABASE_ENV),
-          pair(MONGODB_URI, MONGODB_URI_ENV),
-          pair(WHOAMI, WHOAMI_ENV));
 
-  private static String aggregate(final String path, final String contextPath) {
-    return new Href(realPath(path, contextPath)).type;
+  private static final EventTrace eventTrace =
+      new EventTrace().withServiceName(JES_HTTP).withServiceVersion(VERSION).withName(JES_HTTP);
+
+  private static Optional<Subscriber<Metrics>> accessLogSubscriber(final Config config) {
+    return configValue(config::getBoolean, ACCESS_LOG)
+        .filter(a -> a)
+        .map(a -> lambdaSubscriber(metrics -> LOGGER.info(() -> createAccessLogMessage(metrics))));
   }
 
-  private static Optional<String> configEntry(final Config config, final String path) {
-    return ofNullable(ENV_MAP.get(path))
-        .map(System::getenv)
-        .or(() -> tryToGetSilent(() -> config.getString(path)));
+  private static void addOtelLogger(final Config config) {
+    logRecordProcessor(config)
+        .flatMap(p -> otelLogHandler(namespace(config), JES_HTTP, VERSION, p))
+        .ifPresent(h -> addOtelLogHandler(LOGGER, h));
   }
 
-  private static Optional<Boolean> configEntryBoolean(final Config config, final String path) {
-    return ofNullable(ENV_MAP.get(path))
-        .map(System::getenv)
-        .map(Boolean::parseBoolean)
-        .or(() -> tryToGetSilent(() -> config.getBoolean(path)));
+  private static Optional<String> aggregate(final String path, final String contextPath) {
+    return tryToGetSilent(() -> new Href(realPath(path, contextPath)).type);
   }
 
-  private static String configEntryMust(final Config config, final String path) {
-    return configEntry(config, path)
-        .orElseThrow(() -> new GeneralException("Missing configuration entry " + path));
+  private static Optional<Attributes> attributes(final String path, final String contextPath) {
+    return aggregate(path, contextPath).map(a -> Attributes.builder().put(AGGREGATE, a).build());
   }
 
-  private static Optional<List<String>> configEntryStringList(
-      final Config config, final String path) {
-    return ofNullable(ENV_MAP.get(path))
-        .map(System::getenv)
-        .map(value -> value.split("[, ]"))
-        .map(Arrays::asList)
-        .or(() -> tryToGetSilent(() -> config.getStringList(path)));
+  private static String contextPath(final Config config) {
+    return configValue(config::getString, CONTEXT_PATH).orElse("");
   }
 
   private static void copyHeaders(final Response r1, final HttpResponse r2) {
@@ -230,87 +204,37 @@ public class ApiServer {
         + "]";
   }
 
-  private static Logger createLogger(
-      final Config config, final Deque<JsonObject> deque, final String environment) {
-    final Level logLevel = parse(configEntry(config, LOG_LEVEL).orElse("INFO"));
-    final Logger logger = getLogger(LOGGER);
-
-    logger.setLevel(logLevel);
-
-    if (deque != null) {
-      logger.addHandler(
-          new LogHandler(
-              new ElasticCommonSchema()
-                  .withApp(LOGGER)
-                  .withLogLevel(logger.getLevel())
-                  .withService(LOGGER)
-                  .withServiceVersion(VERSION)
-                  .withEnvironment(environment),
-              deque::addFirst));
-    }
-
-    return logger;
-  }
-
-  private static JsonObject createMetricsMessage(
-      final String aggregate, final String method, final AggregatedMetrics metrics) {
-    return createObjectBuilder()
-        .add("aggregate", aggregate)
-        .add("method", method)
-        .add("minute", metrics.minute.toString())
-        .add("requestCount", metrics.requestCount)
-        .add("requestBytes", metrics.requestBytes)
-        .add("responseBytes", metrics.responseBytes)
-        .add("timeSpent", metrics.timeSpent.toMillis())
-        .add("averageRequestBytes", metrics.requestBytes / metrics.requestCount)
-        .add("averageResponseBytes", metrics.responseBytes / metrics.requestCount)
-        .add("averageTimeSpent", metrics.timeSpent.toMillis() / metrics.requestCount)
-        .build();
-  }
-
-  private static Processor<Metrics, JsonObject> createMetricsProcessor(
-      final Logger logger,
-      final boolean metrics,
-      final boolean accessLog,
-      final String contextPath) {
-    return Pipe.<Metrics, Metrics>pipe(
-            accessLog
-                ? tap(lambdaSubscriber(v -> logger.info(createAccessLogMessage(v))))
-                : passThrough())
-        .then(map(metrics ? metrics(contextPath) : (m -> null)))
-        .then(filter(Objects::nonNull));
-  }
-
-  private static AggregatedMetrics getAggregatedMetrics(
-      final Map<String, Map<String, AggregatedMetrics>> metrics,
-      final String aggregate,
-      final String method) {
-    return metrics
-        .computeIfAbsent(aggregate, key -> new HashMap<>())
-        .computeIfAbsent(method, key -> new AggregatedMetrics());
-  }
-
   private static CompletionStage<Publisher<ByteBuf>> handleRequest(
       final HttpRequest request,
       final InputStream body,
       final HttpResponse response,
       final Server server,
-      final Logger logger,
+      final KafkaProducer<String, JsonObject> producer,
       final Config config) {
+    final Instant started = now();
+
     return toRequest(request)
         .map(r -> r.withBody(tryToGetSilent(() -> createReader(body).read()).orElse(null)))
         .map(
-            r ->
-                pair(
-                    server.returnsMultiple(r),
-                    server.request(r).thenApply(resp -> whoami(request, resp, config))))
+            r -> {
+              traceCommands(request, r.body, producer, config);
+              return r;
+            })
         .map(
-            pair ->
-                pair.second
-                    .thenApply(r -> toResult(r, response, pair.first).orElseGet(Util::empty))
+            r ->
+                triple(
+                    server.returnsMultiple(r),
+                    server.request(r).thenApply(resp -> whoami(request, resp, config)),
+                    r.body))
+        .map(
+            triple ->
+                triple
+                    .second
+                    .thenApply(r -> toResult(r, response, triple.first).orElseGet(Util::empty))
+                    .thenApply(p -> logSlowRequest(request, started, triple.third, p, config))
                     .exceptionally(
                         t -> {
-                          logException(logger, t);
+                          logException(t);
                           response.setStatus(INTERNAL_SERVER_ERROR);
                           return empty();
                         }))
@@ -322,7 +246,7 @@ public class ApiServer {
   }
 
   private static HeaderHandler headerHandler(final Config config) {
-    return configEntry(config, JWT_PUBLIC_KEY).map(JWTVerifier::verify).orElse(h -> h);
+    return configValue(config::getString, JWT_PUBLIC_KEY).map(JWTVerifier::verify).orElse(h -> h);
   }
 
   private static RequestHandler health() {
@@ -351,6 +275,10 @@ public class ApiServer {
 
   private static boolean isSseSetup(final HttpRequest req, final String contextPath) {
     return isPath(req, SSE_SETUP, contextPath);
+  }
+
+  private static Optional<JsonObject> jwt(final HttpRequest request) {
+    return getBearerToken(request).flatMap(net.pincette.jwt.Util::getJwtPayload);
   }
 
   private static Map<String, Object> kafkaConfig(final Config config) {
@@ -387,12 +315,56 @@ public class ApiServer {
         .get();
   }
 
-  private static void logException(final Logger logger, final Throwable t) {
-    logger.log(SEVERE, t.getMessage(), t);
+  private static void logException(final Throwable t) {
+    LOGGER.log(SEVERE, t.getMessage(), t);
+  }
+
+  private static Publisher<ByteBuf> logSlowRequest(
+      final HttpRequest request,
+      final Instant started,
+      final JsonStructure requestBody,
+      final Publisher<ByteBuf> responseBody,
+      final Config config) {
+    final String contextPath = contextPath(config);
+
+    return configValue(config::getDuration, SLOW_REQUEST_THRESHOLD)
+        .map(
+            t ->
+                with(responseBody)
+                    .map(
+                        onCompleteProcessor(
+                            () -> {
+                              final Duration duration = between(started, now());
+
+                              if (duration.compareTo(t) > 0) {
+                                final String path = uriPath(request.uri());
+
+                                warning(
+                                    LOGGER,
+                                    () -> "The request has taken " + duration.toMillis() + "ms",
+                                    () ->
+                                        Attributes.builder()
+                                            .put(HTTP_REQUEST_METHOD, request.method().toString())
+                                            .put(HTTP_REQUEST_BODY, string(requestBody))
+                                            .put(URL_PATH, path)
+                                            .put(USERNAME, username(request))
+                                            .put(DURATION, duration.toMillis())
+                                            .putAll(
+                                                attributes(path, contextPath)
+                                                    .orElseGet(Attributes::empty))
+                                            .build());
+                              }
+                            }))
+                    .get())
+        .orElse(responseBody);
   }
 
   public static void main(final String[] args) {
-    final Config config = load(loadDefault());
+    initLogging();
+
+    final Config config = load();
+
+    addOtelLogger(config);
 
     tryToDoWithRethrow(
         () ->
@@ -401,45 +373,24 @@ public class ApiServer {
                 new StringSerializer(),
                 new JsonSerializer()),
         producer -> {
-          final boolean accessLog = configEntryBoolean(config, ACCESS_LOG).orElse(false);
-          final String contextPath = configEntry(config, CONTEXT_PATH).orElse("");
-          final String environment = configEntry(config, ENVIRONMENT).orElse(null);
-          final String logTopic = configEntry(config, LOG_TOPIC).orElse(null);
-          final DequePublisher<JsonObject> logPublisher =
-              logTopic != null ? new DequePublisher<>() : null;
-          final Logger logger =
-              createLogger(
-                  config,
-                  ofNullable(logPublisher).map(DequePublisher::getDeque).orElse(null),
-                  environment);
-          final String metricsTopic = configEntry(config, METRICS_TOPIC).orElse(null);
-          final Processor<Metrics, JsonObject> metricsProcessor =
-              metricsTopic != null || accessLog
-                  ? createMetricsProcessor(logger, metricsTopic != null, accessLog, contextPath)
-                  : null;
+          final String contextPath = contextPath(config);
 
-          kafkaPublisher(
-                  ofNullable(logPublisher).map(p -> wrapKafka(p, logTopic)).orElse(null),
-                  ofNullable(metricsProcessor).map(p -> wrapKafka(p, metricsTopic)).orElse(null))
-              .ifPresent(p -> sendToKafka(p, producer, logger));
-          logger.info(() -> "Version " + VERSION);
+          LOGGER.info(() -> "Version " + VERSION);
 
           tryToDoWithRethrow(
               () ->
                   new Server()
                       .withContextPath(contextPath)
-                      .withEnvironment(environment)
-                      .withServiceVersion(VERSION)
+                      .withEnvironment(configValue(config::getString, ENVIRONMENT).orElse(null))
                       .withProducer(producer)
-                      .withMongoUri(configEntryMust(config, MONGODB_URI))
-                      .withMongoDatabase(configEntryMust(config, MONGODB_DATABASE))
-                      .withLogger(logger)
-                      .withLogTopic(logTopic),
+                      .withMongoUri(config.getString(MONGODB_URI))
+                      .withMongoDatabase(config.getString(MONGODB_DATABASE))
+                      .withLogger(LOGGER),
               server -> {
                 final RequestHandler requestHandler =
-                    metricsProcessor != null
-                        ? wrapMetrics(requestHandler(server, config, logger), metricsProcessor)
-                        : requestHandler(server, config, logger);
+                    telemetrySubscriber(config)
+                        .map(s -> wrapMetrics(requestHandler(server, producer, config), s))
+                        .orElseGet(() -> requestHandler(server, producer, config));
 
                 tryToDoWithRethrow(
                     () ->
@@ -448,36 +399,26 @@ public class ApiServer {
                             when(request -> isHealthCheck(request, contextPath), health())
                                 .or(request -> isSseSetup(request, contextPath), requestHandler)
                                 .orElse(handle(headerHandler(config)).finishWith(requestHandler))),
-                    s -> start(s, logger));
+                    ApiServer::start);
               });
         });
   }
 
-  private static Function<Metrics, JsonObject> metrics(final String contextPath) {
-    final Map<String, Map<String, AggregatedMetrics>> perAggregate = new HashMap<>();
+  private static Optional<Subscriber<Metrics>> metricsSubscriber(final Config config) {
+    final String contextPath = contextPath(config);
+    final String instance = randomUUID().toString();
 
-    return metrics -> {
-      if (!isHref(realPath(metrics.path(), contextPath))) {
-        return null;
-      }
+    return OtelUtil.metrics(namespace(config), JES_HTTP, VERSION, config)
+        .map(
+            tel ->
+                HttpMetrics.subscriber(
+                    tel.getMeter(JES_HTTP),
+                    path -> attributes(path, contextPath).orElse(null),
+                    instance));
+  }
 
-      final String aggregate = aggregate(metrics.path(), contextPath);
-      final AggregatedMetrics aggregated =
-          getAggregatedMetrics(perAggregate, aggregate, metrics.method());
-      final Instant minute = metrics.timeOccurred().truncatedTo(MINUTES);
-      final JsonObject result =
-          minute.isAfter(aggregated.minute)
-              ? createMetricsMessage(aggregate, metrics.method(), aggregated)
-              : null;
-
-      if (result != null) {
-        perAggregate.get(aggregate).put(metrics.method(), new AggregatedMetrics(metrics));
-      } else {
-        aggregated.add(metrics);
-      }
-
-      return result;
-    };
+  private static String namespace(final Config config) {
+    return configValue(config::getString, NAMESPACE).orElse(JES_HTTP);
   }
 
   private static String realPath(final String path, final String contextPath) {
@@ -485,27 +426,10 @@ public class ApiServer {
   }
 
   private static RequestHandler requestHandler(
-      final Server server, final Config config, final Logger logger) {
+      final Server server, final KafkaProducer<String, JsonObject> producer, final Config config) {
     return accumulate(
         (req, body, resp) ->
-            handleRequest(req, body, resp, setFanout(server, config), logger, config));
-  }
-
-  private static void sendToKafka(
-      final Publisher<ProducerRecord<String, JsonObject>> publisher,
-      final KafkaProducer<String, JsonObject> producer,
-      final Logger logger) {
-    with(publisher)
-        .per(BATCH_SIZE, BATCH_TIMEOUT)
-        .get()
-        .subscribe(
-            lambdaSubscriberAsync(
-                list ->
-                    send(producer, list)
-                        .thenApply(result -> must(result, r -> r))
-                        .thenAccept(r -> {}),
-                () -> {},
-                e -> logException(logger, e)));
+            handleRequest(req, body, resp, setFanout(server, config), producer, config));
   }
 
   private static Map<String, String[]> setCookie(
@@ -514,20 +438,28 @@ public class ApiServer {
   }
 
   private static Server setFanout(final Server server, final Config config) {
-    return configEntry(config, FANOUT_URI)
+    return configValue(config::getString, FANOUT_URI)
         .map(
             uri ->
                 server
                     .withFanoutUri(uri)
-                    .withFanoutPrivateKey(configEntryMust(config, FANOUT_PRIVATE_KEY))
-                    .withFanoutPublicKey(configEntryMust(config, FANOUT_PUBLIC_KEY)))
+                    .withFanoutPrivateKey(config.getString(FANOUT_PRIVATE_KEY))
+                    .withFanoutPublicKey(config.getString(FANOUT_PUBLIC_KEY)))
         .orElse(server);
   }
 
-  private static void start(final HttpServer server, final Logger logger) {
-    logger.info("Ready");
+  private static void start(final HttpServer server) {
+    LOGGER.info("Ready");
     server.start();
-    logger.info("Done");
+    LOGGER.info("Done");
+  }
+
+  private static Optional<Subscriber<Metrics>> telemetrySubscriber(final Config config) {
+    return Optional.of(
+            concat(accessLogSubscriber(config).stream(), metricsSubscriber(config).stream())
+                .toList())
+        .filter(list -> !list.isEmpty())
+        .map(list -> list.size() > 1 ? Fanout.of(list) : list.get(0));
   }
 
   private static Map<String, String[]> toHeaders(final HttpHeaders headers) {
@@ -562,15 +494,49 @@ public class ApiServer {
         .map(chain -> chain.map(s -> s.getBytes(UTF_8)).map(new BufferedProcessor(0xffff)).get());
   }
 
+  private static void traceCommands(
+      final HttpRequest request,
+      final JsonStructure body,
+      final KafkaProducer<String, JsonObject> producer,
+      final Config config) {
+    configValue(config::getString, TRACES_TOPIC)
+        .filter(topic -> isObject(body) && isCommand(body.asJsonObject()))
+        .ifPresent(
+            topic ->
+                send(
+                    producer,
+                    new ProducerRecord<>(
+                        topic,
+                        body.asJsonObject().getString(CORR),
+                        traceMessage(request, body.asJsonObject(), config))));
+  }
+
+  private static JsonObject traceMessage(
+      final HttpRequest request, final JsonObject command, final Config config) {
+    return eventTrace
+        .withTraceId(command.getString(CORR))
+        .withTimestamp(now())
+        .withServiceNamespace(namespace(config))
+        .withModuleName(command.getString(TYPE))
+        .withUsername(username(request))
+        .withAttributes(map(pair(COMMAND_ATTRIBUTE, command.getString(COMMAND))))
+        .toJson()
+        .build();
+  }
+
+  private static String uriPath(final String uri) {
+    return tryToGetSilent(() -> new URI(uri)).map(URI::getPath).orElse(uri);
+  }
+
+  private static String username(final HttpRequest request) {
+    return jwt(request).flatMap(j -> getString(j, "/" + SUB)).orElse(ANONYMOUS);
+  }
+
   private static Response whoami(
       final HttpRequest request, final Response response, final Config config) {
-    return configEntryStringList(config, WHOAMI)
-        .flatMap(fields -> configEntry(config, DOMAIN).map(d -> pair(fields, d)))
-        .flatMap(
-            pair ->
-                getBearerToken(request)
-                    .flatMap(net.pincette.jwt.Util::getJwtPayload)
-                    .map(t -> triple(pair.first, pair.second, t)))
+    return configValue(config::getStringList, WHOAMI)
+        .flatMap(fields -> configValue(config::getString, DOMAIN).map(d -> pair(fields, d)))
+        .flatMap(pair -> jwt(request).map(t -> triple(pair.first, pair.second, t)))
         .map(
             triple ->
                 response.withHeaders(
@@ -590,40 +556,5 @@ public class ApiServer {
         .filter(Objects::nonNull)
         .reduce(createObjectBuilder(), (b, p) -> b.add(p.first, p.second), (b1, b2) -> b1)
         .build();
-  }
-
-  private static Publisher<ProducerRecord<String, JsonObject>> wrapKafka(
-      final Publisher<JsonObject> publisher, final String topic) {
-    return with(publisher)
-        .map(json -> new ProducerRecord<>(topic, randomUUID().toString(), json))
-        .get();
-  }
-
-  private static class AggregatedMetrics {
-    private long requestBytes;
-    private long responseBytes;
-    private final Instant minute;
-    private long requestCount;
-    private Duration timeSpent;
-
-    private AggregatedMetrics() {
-      minute = now().truncatedTo(MINUTES);
-      timeSpent = ofMillis(0);
-    }
-
-    private AggregatedMetrics(final Metrics metrics) {
-      requestBytes = metrics.requestBytes();
-      responseBytes = metrics.responseBytes();
-      minute = metrics.timeOccurred().truncatedTo(MINUTES);
-      requestCount = 1;
-      timeSpent = metrics.timeTaken();
-    }
-
-    private void add(final Metrics metrics) {
-      requestBytes += metrics.requestBytes();
-      responseBytes += metrics.responseBytes();
-      ++requestCount;
-      timeSpent = timeSpent.plus(metrics.timeTaken());
-    }
   }
 }
