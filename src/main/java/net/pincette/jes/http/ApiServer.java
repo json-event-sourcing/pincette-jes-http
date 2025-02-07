@@ -500,7 +500,7 @@ public class ApiServer {
       final KafkaProducer<String, JsonObject> producer,
       final Config config) {
     configValue(config::getString, TRACES_TOPIC)
-        .filter(topic -> isObject(body) && isCommand(body.asJsonObject()))
+        .filter(topic -> body != null && isObject(body) && isCommand(body.asJsonObject()))
         .ifPresent(
             topic ->
                 send(
