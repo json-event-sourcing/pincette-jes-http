@@ -21,7 +21,6 @@ import static java.util.logging.Level.SEVERE;
 import static java.util.logging.Logger.getLogger;
 import static java.util.stream.Collectors.joining;
 import static java.util.stream.Collectors.toMap;
-import static java.util.stream.Stream.concat;
 import static net.pincette.config.Util.configValue;
 import static net.pincette.jes.Command.isCommand;
 import static net.pincette.jes.JsonFields.COMMAND;
@@ -47,13 +46,14 @@ import static net.pincette.netty.http.PipelineHandler.handle;
 import static net.pincette.netty.http.Util.getBearerToken;
 import static net.pincette.netty.http.Util.wrapMetrics;
 import static net.pincette.rs.Chain.with;
+import static net.pincette.rs.Filter.filter;
 import static net.pincette.rs.LambdaSubscriber.lambdaSubscriber;
 import static net.pincette.rs.Util.empty;
 import static net.pincette.rs.Util.onCompleteProcessor;
+import static net.pincette.rs.Util.subscribe;
 import static net.pincette.util.Collections.list;
 import static net.pincette.util.Collections.map;
 import static net.pincette.util.Collections.merge;
-import static net.pincette.util.Or.tryWith;
 import static net.pincette.util.Pair.pair;
 import static net.pincette.util.Triple.triple;
 import static net.pincette.util.Util.getLastSegment;
@@ -72,6 +72,7 @@ import java.io.InputStream;
 import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -100,8 +101,6 @@ import net.pincette.netty.http.HttpServer;
 import net.pincette.netty.http.JWTVerifier;
 import net.pincette.netty.http.Metrics;
 import net.pincette.netty.http.RequestHandler;
-import net.pincette.rs.Fanout;
-import net.pincette.rs.Merge;
 import net.pincette.rs.Util;
 import net.pincette.util.Array;
 import net.pincette.util.Collections;
@@ -144,7 +143,8 @@ public class ApiServer {
   private static final String TRACES_TOPIC = "tracesTopic";
   private static final String URL_PATH = "url.path";
   private static final String USERNAME = "username";
-  private static final String VERSION = "2.2.0";
+  private static final String VERSION = "2.2.2";
+  private static final String WARN_LOOKUP = "warnLookup";
   private static final String WHOAMI = "whoami";
 
   private static final EventTrace eventTrace =
@@ -302,19 +302,6 @@ public class ApiServer {
         .collect(joining("."));
   }
 
-  private static Optional<Publisher<ProducerRecord<String, JsonObject>>> kafkaPublisher(
-      final Publisher<ProducerRecord<String, JsonObject>> logPublisher,
-      final Publisher<ProducerRecord<String, JsonObject>> metricsPublisher) {
-    return tryWith(
-            () ->
-                ofNullable(logPublisher)
-                    .flatMap(l -> ofNullable(metricsPublisher).map(m -> pair(l, m)))
-                    .map(p -> Merge.of(p.first, p.second)))
-        .or(() -> ofNullable(logPublisher))
-        .or(() -> ofNullable(metricsPublisher))
-        .get();
-  }
-
   private static void logException(final Throwable t) {
     LOGGER.log(SEVERE, t.getMessage(), t);
   }
@@ -345,7 +332,11 @@ public class ApiServer {
                                     () ->
                                         Attributes.builder()
                                             .put(HTTP_REQUEST_METHOD, request.method().toString())
-                                            .put(HTTP_REQUEST_BODY, string(requestBody))
+                                            .put(
+                                                HTTP_REQUEST_BODY,
+                                                ofNullable(requestBody)
+                                                    .map(JsonUtil::string)
+                                                    .orElse(""))
                                             .put(URL_PATH, path)
                                             .put(USERNAME, username(request))
                                             .put(DURATION, duration.toMillis())
@@ -385,10 +376,12 @@ public class ApiServer {
                       .withProducer(producer)
                       .withMongoUri(config.getString(MONGODB_URI))
                       .withMongoDatabase(config.getString(MONGODB_DATABASE))
-                      .withLogger(LOGGER),
+                      .withLogger(LOGGER)
+                      .withWarnLookup(configValue(config::getBoolean, WARN_LOOKUP).orElse(false)),
               server -> {
                 final RequestHandler requestHandler =
-                    telemetrySubscriber(config)
+                    Optional.of(telemetrySubscribers(config))
+                        .filter(s -> !s.isEmpty())
                         .map(s -> wrapMetrics(requestHandler(server, producer, config), s))
                         .orElseGet(() -> requestHandler(server, producer, config));
 
@@ -411,10 +404,12 @@ public class ApiServer {
     return OtelUtil.metrics(namespace(config), JES_HTTP, VERSION, config)
         .map(
             tel ->
-                HttpMetrics.subscriber(
-                    tel.getMeter(JES_HTTP),
-                    path -> attributes(path, contextPath).orElse(null),
-                    instance));
+                subscribe(
+                    filter(m -> !m.path().startsWith(contextPath + "/" + SSE_SETUP)),
+                    HttpMetrics.subscriber(
+                        tel.getMeter(JES_HTTP),
+                        path -> attributes(path, contextPath).orElse(null),
+                        instance)));
   }
 
   private static String namespace(final Config config) {
@@ -454,12 +449,13 @@ public class ApiServer {
     LOGGER.info("Done");
   }
 
-  private static Optional<Subscriber<Metrics>> telemetrySubscriber(final Config config) {
-    return Optional.of(
-            concat(accessLogSubscriber(config).stream(), metricsSubscriber(config).stream())
-                .toList())
-        .filter(list -> !list.isEmpty())
-        .map(list -> list.size() > 1 ? Fanout.of(list) : list.get(0));
+  private static List<Subscriber<Metrics>> telemetrySubscribers(final Config config) {
+    final List<Subscriber<Metrics>> subscribers = new ArrayList<>();
+
+    accessLogSubscriber(config).ifPresent(subscribers::add);
+    metricsSubscriber(config).ifPresent(subscribers::add);
+
+    return subscribers;
   }
 
   private static Map<String, String[]> toHeaders(final HttpHeaders headers) {
