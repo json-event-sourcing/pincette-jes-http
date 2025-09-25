@@ -3,7 +3,7 @@
 This is a standalone HTTP server for interacting with [JSON
 aggregates](https://github.com/json-event-sourcing/pincette-jes). On the write-side you can send
 commands, which are handled asynchronously. They are put on a [Kafka](https://kafka.apache.org)
-command topic, which corresponds to the aggregate type in the [command](https://github.com/json-event-sourcing/pincette-jes). This is acknowledged with a 202 HTTP status code (Accepted). Changes to aggregates come back through [Server-Sent Events](https://www.w3.org/TR/eventsource/). This flow fits well with reactive clients.
+command topic, which corresponds to the aggregate type in the [command](https://github.com/json-event-sourcing/pincette-jes). This is acknowledged with a 202 HTTP status code (Accepted). Changes to aggregates come back through [Server-Sent Events](https://github.com/wdonne/pincette-kafka-sse). This flow fits well with reactive clients.
 
 The read-side is handled with [MongoDB](https://www.mongodb.com). You can fetch and search aggregates.
 
@@ -24,9 +24,6 @@ The configuration is managed by the [Lightbend Config package](https://github.co
 |accessLog|No|false|A boolean indicating if access log entries should be sent to the log topic, which should be set.|
 |contextPath|No|/api|The URL path prefix.|
 |environment|No|None|The name of the environment, which will be used as a suffix for the aggregates, e.g. `tst`, `acc`, etc.|
-|fanout.uri|No|None|The URL of the [fanout.io](https://fanout.io) service.|
-|fanout.privateKey|Only when FANOUT_URI is present|None|The private key in PEM format with which the usernames are signed during the Server-Sent Events set-up.|
-|fanout.publicKey|Only when FANOUT_URI is present|None|The public key in PEM format with which the usernames are verified during the Server-Sent Events set-up.|
 |jwtPublicKey|Yes|None|The public key string, which is used to validate all JSON Web Tokens.|
 |kafka|No|localhost:9092|All Kafka settings come below this entry. So for example, the setting `bootstrap.servers` would go to the entry `kafka.bootstrap.servers`. The equivalent environment variable would then be `KAFKA_BOOTSTRAP_SERVERS`.|
 |logLevel|No|INFO|The log level as defined in [java.util.logging.Level](https://docs.oracle.com/javase/8/docs/api/java/util/logging/Level.html).|
@@ -35,6 +32,7 @@ The configuration is managed by the [Lightbend Config package](https://github.co
 |namespace|No|jes-http|A name to distinguish several deployments in the same environment.|
 |otlp.grpc|No|None|The OpenTelemetry endpoint for logs and metrics. It should be a URL like `http://localhost:4317`.|
 |slowRequestThreshold|No|None|If this duration is set, then requests that take longer are logged with their request body.|
+|traceSamplePercentage|No|10|The percentage of distributed trace samples that are retained. The value should be between 1 and 100. You should use the same percentage in all components that contribute to a trace, otherwise you may see incomplete traces.|
 |tracesTopic|No|None|The Kafka topic to which event traces are sent.|
 |whoami|No|None|An array of fields that are extracted from the JWT and put in a JSON object that becomes the value of the `whoami` cookie. The cookie can be used by clients to obtain basic information about the current user.|
 

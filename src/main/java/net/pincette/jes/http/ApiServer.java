@@ -31,6 +31,7 @@ import static net.pincette.jes.tel.OtelLogger.warning;
 import static net.pincette.jes.tel.OtelUtil.addOtelLogHandler;
 import static net.pincette.jes.tel.OtelUtil.logRecordProcessor;
 import static net.pincette.jes.tel.OtelUtil.otelLogHandler;
+import static net.pincette.jes.tel.OtelUtil.retainTraceSample;
 import static net.pincette.jes.util.Kafka.createReliableProducer;
 import static net.pincette.jes.util.Kafka.fromConfig;
 import static net.pincette.jes.util.Kafka.send;
@@ -121,12 +122,10 @@ public class ApiServer {
   private static final String CLIENT_ID = "client.id";
   private static final String COMMAND_ATTRIBUTE = "command";
   private static final String CONTEXT_PATH = "contextPath";
+  private static final int DEFAULT_TRACE_SAMPLE_PERCENTAGE = 10;
   private static final String DOMAIN = "domain";
   private static final String DURATION = "duration";
   private static final String ENVIRONMENT = "environment";
-  private static final String FANOUT_PRIVATE_KEY = "fanout.privateKey";
-  private static final String FANOUT_PUBLIC_KEY = "fanout.publicKey";
-  private static final String FANOUT_URI = "fanout.uri";
   private static final String HEALTH_PATH = "health";
   private static final String HTTP_REQUEST_BODY = "http.request.body";
   private static final String HTTP_REQUEST_METHOD = "http.request.method";
@@ -140,10 +139,11 @@ public class ApiServer {
   private static final String NAMESPACE = "namespace";
   private static final String SSE_SETUP = "sse-setup";
   private static final String SLOW_REQUEST_THRESHOLD = "slowRequestThreshold";
+  private static final String TRACE_SAMPLE_PERCENTAGE = "traceSamplePercentage";
   private static final String TRACES_TOPIC = "tracesTopic";
   private static final String URL_PATH = "url.path";
   private static final String USERNAME = "username";
-  private static final String VERSION = "2.2.2";
+  private static final String VERSION = "3.0.0";
   private static final String WARN_LOOKUP = "warnLookup";
   private static final String WHOAMI = "whoami";
 
@@ -212,12 +212,15 @@ public class ApiServer {
       final KafkaProducer<String, JsonObject> producer,
       final Config config) {
     final Instant started = now();
+    final int percentage =
+        configValue(config::getInt, TRACE_SAMPLE_PERCENTAGE)
+            .orElse(DEFAULT_TRACE_SAMPLE_PERCENTAGE);
 
     return toRequest(request)
         .map(r -> r.withBody(tryToGetSilent(() -> createReader(body).read()).orElse(null)))
         .map(
             r -> {
-              traceCommands(request, r.body, producer, config);
+              traceCommands(request, r.body, producer, percentage, config);
               return r;
             })
         .map(
@@ -423,24 +426,12 @@ public class ApiServer {
   private static RequestHandler requestHandler(
       final Server server, final KafkaProducer<String, JsonObject> producer, final Config config) {
     return accumulate(
-        (req, body, resp) ->
-            handleRequest(req, body, resp, setFanout(server, config), producer, config));
+        (req, body, resp) -> handleRequest(req, body, resp, server, producer, config));
   }
 
   private static Map<String, String[]> setCookie(
       final Map<String, String[]> headers, final String name, final String value) {
     return merge(headers, map(pair(SET_COOKIE.toString(), new String[] {name + "=" + value})));
-  }
-
-  private static Server setFanout(final Server server, final Config config) {
-    return configValue(config::getString, FANOUT_URI)
-        .map(
-            uri ->
-                server
-                    .withFanoutUri(uri)
-                    .withFanoutPrivateKey(config.getString(FANOUT_PRIVATE_KEY))
-                    .withFanoutPublicKey(config.getString(FANOUT_PUBLIC_KEY)))
-        .orElse(server);
   }
 
   private static void start(final HttpServer server) {
@@ -494,9 +485,15 @@ public class ApiServer {
       final HttpRequest request,
       final JsonStructure body,
       final KafkaProducer<String, JsonObject> producer,
+      final int percentage,
       final Config config) {
     configValue(config::getString, TRACES_TOPIC)
-        .filter(topic -> body != null && isObject(body) && isCommand(body.asJsonObject()))
+        .filter(
+            topic ->
+                body != null
+                    && isObject(body)
+                    && isCommand(body.asJsonObject())
+                    && retainTraceSample(body.asJsonObject().getString(CORR), percentage))
         .ifPresent(
             topic ->
                 send(
