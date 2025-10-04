@@ -20,7 +20,7 @@ All requests should have a [JSON Web Token](https://jwt.io), which may appear as
 The configuration is managed by the [Lightbend Config package](https://github.com/lightbend/config). By default it will try to load `conf/application.conf`. An alternative configuration may be loaded by adding `-Dconfig.resource=myconfig.conf`, where the file is also supposed to be in the `conf` directory. If no configuration file is available it will load a default one from the resources. The following entries are available:
 
 |Entry|Mandatory|Default|Description|
-|---|---|---|---|---|
+|---|---|---|---|
 |accessLog|No|false|A boolean indicating if access log entries should be sent to the log topic, which should be set.|
 |contextPath|No|/api|The URL path prefix.|
 |environment|No|None|The name of the environment, which will be used as a suffix for the aggregates, e.g. `tst`, `acc`, etc.|
