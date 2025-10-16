@@ -6,7 +6,7 @@
 
   <groupId>net.pincette</groupId>
   <artifactId>pincette-jes-http</artifactId>
-  <version>3.0.0</version>
+  <version>3.0.1</version>
   <name>pincette-jes-http</name>
   <description>HTTP Server For JSON Event Sourcing</description>
   <url>https://github.com/json-event-sourcing/pincette-jes-http</url>
@@ -48,6 +48,18 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
   </properties>
 
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>software.amazon.awssdk</groupId>
+        <artifactId>bom</artifactId>
+        <version>2.35.8</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
   <dependencies>
     <dependency>
       <groupId>net.pincette</groupId>
@@ -72,7 +84,7 @@
     <dependency>
       <groupId>net.pincette</groupId>
       <artifactId>pincette-rs</artifactId>
-      <version>3.11.0</version>
+      <version>3.11.1</version>
     </dependency>
     <dependency>
       <groupId>net.pincette</groupId>
@@ -98,6 +110,10 @@
       <groupId>org.glassfish</groupId>
       <artifactId>javax.json</artifactId>
       <version>1.1.4</version>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>sts</artifactId>
     </dependency>
     <dependency>
       <groupId>org.slf4j</groupId>
