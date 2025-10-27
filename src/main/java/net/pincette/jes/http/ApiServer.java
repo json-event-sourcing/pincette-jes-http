@@ -18,6 +18,7 @@ import static java.util.Optional.ofNullable;
 import static java.util.UUID.randomUUID;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static java.util.logging.Level.SEVERE;
+import static java.util.logging.Level.parse;
 import static java.util.logging.Logger.getLogger;
 import static java.util.stream.Collectors.joining;
 import static java.util.stream.Collectors.toMap;
@@ -47,11 +48,9 @@ import static net.pincette.netty.http.PipelineHandler.handle;
 import static net.pincette.netty.http.Util.getBearerToken;
 import static net.pincette.netty.http.Util.wrapMetrics;
 import static net.pincette.rs.Chain.with;
-import static net.pincette.rs.Filter.filter;
 import static net.pincette.rs.LambdaSubscriber.lambdaSubscriber;
 import static net.pincette.rs.Util.empty;
 import static net.pincette.rs.Util.onCompleteProcessor;
-import static net.pincette.rs.Util.subscribe;
 import static net.pincette.util.Collections.list;
 import static net.pincette.util.Collections.map;
 import static net.pincette.util.Collections.merge;
@@ -134,16 +133,16 @@ public class ApiServer {
   private static final String KAFKA = "kafka";
   private static final String KAFKA_PREFIX = "KAFKA_";
   private static final Logger LOGGER = getLogger("net.pincette.jes.http");
+  private static final String LOG_LEVEL = "logLevel";
   private static final String MONGODB_DATABASE = "mongodb.database";
   private static final String MONGODB_URI = "mongodb.uri";
   private static final String NAMESPACE = "namespace";
-  private static final String SSE_SETUP = "sse-setup";
   private static final String SLOW_REQUEST_THRESHOLD = "slowRequestThreshold";
   private static final String TRACE_SAMPLE_PERCENTAGE = "traceSamplePercentage";
   private static final String TRACES_TOPIC = "tracesTopic";
   private static final String URL_PATH = "url.path";
   private static final String USERNAME = "username";
-  private static final String VERSION = "3.0.1";
+  private static final String VERSION = "3.1.0";
   private static final String WARN_LOOKUP = "warnLookup";
   private static final String WHOAMI = "whoami";
 
@@ -276,10 +275,6 @@ public class ApiServer {
         .orElse(false);
   }
 
-  private static boolean isSseSetup(final HttpRequest req, final String contextPath) {
-    return isPath(req, SSE_SETUP, contextPath);
-  }
-
   private static Optional<JsonObject> jwt(final HttpRequest request) {
     return getBearerToken(request).flatMap(net.pincette.jwt.Util::getJwtPayload);
   }
@@ -358,6 +353,7 @@ public class ApiServer {
 
     final Config config = load();
 
+    setLogLevel(config);
     addOtelLogger(config);
 
     tryToDoWithRethrow(
@@ -393,7 +389,6 @@ public class ApiServer {
                         new HttpServer(
                             parseInt(args[0]),
                             when(request -> isHealthCheck(request, contextPath), health())
-                                .or(request -> isSseSetup(request, contextPath), requestHandler)
                                 .orElse(handle(headerHandler(config)).finishWith(requestHandler))),
                     ApiServer::start);
               });
@@ -407,12 +402,10 @@ public class ApiServer {
     return OtelUtil.metrics(namespace(config), JES_HTTP, VERSION, config)
         .map(
             tel ->
-                subscribe(
-                    filter(m -> !m.path().startsWith(contextPath + "/" + SSE_SETUP)),
-                    HttpMetrics.subscriber(
-                        tel.getMeter(JES_HTTP),
-                        path -> attributes(path, contextPath).orElse(null),
-                        instance)));
+                HttpMetrics.subscriber(
+                    tel.getMeter(JES_HTTP),
+                    path -> attributes(path, contextPath).orElse(null),
+                    instance));
   }
 
   private static String namespace(final Config config) {
@@ -432,6 +425,12 @@ public class ApiServer {
   private static Map<String, String[]> setCookie(
       final Map<String, String[]> headers, final String name, final String value) {
     return merge(headers, map(pair(SET_COOKIE.toString(), new String[] {name + "=" + value})));
+  }
+
+  private static void setLogLevel(final Config config) {
+    configValue(config::getString, LOG_LEVEL)
+        .flatMap(level -> tryToGetSilent(() -> parse(level)))
+        .ifPresent(LOGGER::setLevel);
   }
 
   private static void start(final HttpServer server) {
