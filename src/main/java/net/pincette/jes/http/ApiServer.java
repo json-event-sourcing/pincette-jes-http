@@ -36,6 +36,9 @@ import static net.pincette.jes.tel.OtelUtil.retainTraceSample;
 import static net.pincette.jes.util.Kafka.createReliableProducer;
 import static net.pincette.jes.util.Kafka.fromConfig;
 import static net.pincette.jes.util.Kafka.send;
+import static net.pincette.json.Factory.f;
+import static net.pincette.json.Factory.o;
+import static net.pincette.json.Factory.v;
 import static net.pincette.json.JsonUtil.createObjectBuilder;
 import static net.pincette.json.JsonUtil.createReader;
 import static net.pincette.json.JsonUtil.getString;
@@ -101,6 +104,7 @@ import net.pincette.netty.http.HttpServer;
 import net.pincette.netty.http.JWTVerifier;
 import net.pincette.netty.http.Metrics;
 import net.pincette.netty.http.RequestHandler;
+import net.pincette.rs.Source;
 import net.pincette.rs.Util;
 import net.pincette.util.Array;
 import net.pincette.util.Collections;
@@ -142,7 +146,7 @@ public class ApiServer {
   private static final String TRACES_TOPIC = "tracesTopic";
   private static final String URL_PATH = "url.path";
   private static final String USERNAME = "username";
-  private static final String VERSION = "3.1.3";
+  private static final String VERSION = "3.2.0";
   private static final String WARN_LOOKUP = "warnLookup";
   private static final String WHOAMI = "whoami";
 
@@ -422,6 +426,15 @@ public class ApiServer {
         (req, body, resp) -> handleRequest(req, body, resp, server, producer, config));
   }
 
+  private static Optional<Publisher<JsonObject>> responseBody(final Response response) {
+    return ofNullable(response.body)
+        .or(
+            () ->
+                ofNullable(response.exception)
+                    .map(net.pincette.util.Util::getStackTrace)
+                    .map(s -> Source.of(o(f("exception", v(s))))));
+  }
+
   private static Map<String, String[]> setCookie(
       final Map<String, String[]> headers, final String name, final String value) {
     return merge(headers, map(pair(SET_COOKIE.toString(), new String[] {name + "=" + value})));
@@ -470,12 +483,13 @@ public class ApiServer {
     r2.setStatus(valueOf(r1.statusCode));
     copyHeaders(r1, r2);
 
-    if (r1.body != null) {
+    final Optional<Publisher<JsonObject>> body = responseBody(r1);
+
+    if (body.isPresent()) {
       r2.headers().set("Content-Type", "application/json");
     }
 
-    return ofNullable(r1.body)
-        .map(body -> with(body).map(JsonUtil::string))
+    return body.map(b -> with(b).map(JsonUtil::string))
         .map(chain -> returnsMultiple ? chain.separate(",").before("[").after("]") : chain)
         .map(chain -> chain.map(s -> s.getBytes(UTF_8)).map(new BufferedProcessor(0xffff)).get());
   }

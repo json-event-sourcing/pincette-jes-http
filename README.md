@@ -13,7 +13,7 @@ One special path is `<contextPath>/health`, which just returns status code 200 (
 
 ## Authentication
 
-All requests should have a [JSON Web Token](https://jwt.io), which may appear as a bearer token in the `Authotrization` header or the cookie named `access_token`. The configuration should have the public key with which the tokens can be validated.
+All requests should have a [JSON Web Token](https://jwt.io), which may appear as a bearer token in the `Authotrization` header or the cookie named `access_token`. If the configuration has a public key, then the tokens will be validated. But normally you would put the service behind some gateway that handles the validation.
 
 ## Configuration
 
@@ -24,7 +24,7 @@ The configuration is managed by the [Lightbend Config package](https://github.co
 |accessLog|No|false|A boolean indicating if access log entries should be sent to the log topic, which should be set.|
 |contextPath|No|/api|The URL path prefix.|
 |environment|No|None|The name of the environment, which will be used as a suffix for the aggregates, e.g. `tst`, `acc`, etc.|
-|jwtPublicKey|Yes|None|The public key string, which is used to validate all JSON Web Tokens.|
+|jwtPublicKey|No|None|The public key string, which is used to validate all JSON Web Tokens.|
 |kafka|No|localhost:9092|All Kafka settings come below this entry. So for example, the setting `bootstrap.servers` would go to the entry `kafka.bootstrap.servers`. The equivalent environment variable would then be `KAFKA_BOOTSTRAP_SERVERS`.|
 |logLevel|No|INFO|The log level as defined in [java.util.logging.Level](https://docs.oracle.com/javase/8/docs/api/java/util/logging/Level.html).|
 |mongodb.database|No|es|The name of the MongoDB database.|
