@@ -146,7 +146,7 @@ public class ApiServer {
   private static final String TRACES_TOPIC = "tracesTopic";
   private static final String URL_PATH = "url.path";
   private static final String USERNAME = "username";
-  private static final String VERSION = "3.2.0";
+  private static final String VERSION = "3.2.1";
   private static final String WARN_LOOKUP = "warnLookup";
   private static final String WHOAMI = "whoami";
 
