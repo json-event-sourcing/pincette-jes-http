@@ -2,8 +2,8 @@ package net.pincette.jes.http;
 
 import static com.typesafe.config.ConfigFactory.load;
 import static io.netty.handler.codec.http.HttpHeaderNames.SET_COOKIE;
-import static io.netty.handler.codec.http.HttpMethod.GET;
 import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
+import static io.netty.handler.codec.http.HttpResponseStatus.FORBIDDEN;
 import static io.netty.handler.codec.http.HttpResponseStatus.INTERNAL_SERVER_ERROR;
 import static io.netty.handler.codec.http.HttpResponseStatus.OK;
 import static io.netty.handler.codec.http.HttpResponseStatus.valueOf;
@@ -22,10 +22,12 @@ import static java.util.logging.Level.parse;
 import static java.util.logging.Logger.getLogger;
 import static java.util.stream.Collectors.joining;
 import static java.util.stream.Collectors.toMap;
+import static java.util.stream.Collectors.toSet;
 import static net.pincette.config.Util.configValue;
 import static net.pincette.jes.Command.isCommand;
 import static net.pincette.jes.JsonFields.COMMAND;
 import static net.pincette.jes.JsonFields.CORR;
+import static net.pincette.jes.JsonFields.ROLES;
 import static net.pincette.jes.JsonFields.SUB;
 import static net.pincette.jes.JsonFields.TYPE;
 import static net.pincette.jes.tel.OtelLogger.warning;
@@ -39,8 +41,10 @@ import static net.pincette.jes.util.Kafka.send;
 import static net.pincette.json.Factory.f;
 import static net.pincette.json.Factory.o;
 import static net.pincette.json.Factory.v;
+import static net.pincette.json.JsonUtil.asString;
 import static net.pincette.json.JsonUtil.createObjectBuilder;
 import static net.pincette.json.JsonUtil.createReader;
+import static net.pincette.json.JsonUtil.getArray;
 import static net.pincette.json.JsonUtil.getString;
 import static net.pincette.json.JsonUtil.getValue;
 import static net.pincette.json.JsonUtil.isObject;
@@ -54,6 +58,7 @@ import static net.pincette.rs.Chain.with;
 import static net.pincette.rs.LambdaSubscriber.lambdaSubscriber;
 import static net.pincette.rs.Util.empty;
 import static net.pincette.rs.Util.onCompleteProcessor;
+import static net.pincette.util.Collections.intersection;
 import static net.pincette.util.Collections.list;
 import static net.pincette.util.Collections.map;
 import static net.pincette.util.Collections.merge;
@@ -68,6 +73,7 @@ import static net.pincette.util.Util.tryToGetSilent;
 import com.typesafe.config.Config;
 import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.http.HttpHeaders;
+import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
 import io.opentelemetry.api.common.Attributes;
@@ -76,11 +82,14 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Flow.Publisher;
 import java.util.concurrent.Flow.Subscriber;
@@ -100,6 +109,7 @@ import net.pincette.json.JsonUtil;
 import net.pincette.kafka.json.JsonSerializer;
 import net.pincette.netty.http.BufferedProcessor;
 import net.pincette.netty.http.HeaderHandler;
+import net.pincette.netty.http.Headers;
 import net.pincette.netty.http.HttpServer;
 import net.pincette.netty.http.JWTVerifier;
 import net.pincette.netty.http.Metrics;
@@ -107,6 +117,7 @@ import net.pincette.netty.http.RequestHandler;
 import net.pincette.rs.Source;
 import net.pincette.rs.Util;
 import net.pincette.util.Array;
+import net.pincette.util.Cases;
 import net.pincette.util.Collections;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -122,13 +133,18 @@ public class ApiServer {
   private static final String ACCESS_LOG = "accessLog";
   private static final String AGGREGATE = "aggregate";
   private static final String ANONYMOUS = "anonymous";
+  private static final String AUTHORIZATION = "authorization";
   private static final String CLIENT_ID = "client.id";
   private static final String COMMAND_ATTRIBUTE = "command";
   private static final String CONTEXT_PATH = "contextPath";
+  private static final boolean DEFAULT_DENY_BY_DEFAULT = false;
   private static final int DEFAULT_TRACE_SAMPLE_PERCENTAGE = 10;
+  private static final String DELETE = "delete";
+  private static final String DENY_BY_DEFAULT = AUTHORIZATION + ".denyByDefault";
   private static final String DOMAIN = "domain";
   private static final String DURATION = "duration";
   private static final String ENVIRONMENT = "environment";
+  private static final String GET = "get";
   private static final String HEALTH_PATH = "health";
   private static final String HTTP_REQUEST_BODY = "http.request.body";
   private static final String HTTP_REQUEST_METHOD = "http.request.method";
@@ -141,12 +157,13 @@ public class ApiServer {
   private static final String MONGODB_DATABASE = "mongodb.database";
   private static final String MONGODB_URI = "mongodb.uri";
   private static final String NAMESPACE = "namespace";
+  private static final String PUT = "put";
   private static final String SLOW_REQUEST_THRESHOLD = "slowRequestThreshold";
   private static final String TRACE_SAMPLE_PERCENTAGE = "traceSamplePercentage";
   private static final String TRACES_TOPIC = "tracesTopic";
   private static final String URL_PATH = "url.path";
   private static final String USERNAME = "username";
-  private static final String VERSION = "3.2.4";
+  private static final String VERSION = "3.3.0";
   private static final String WARN_LOOKUP = "warnLookup";
   private static final String WHOAMI = "whoami";
 
@@ -166,15 +183,81 @@ public class ApiServer {
   }
 
   private static Optional<String> aggregate(final String path, final String contextPath) {
-    return tryToGetSilent(() -> new Href(realPath(path, contextPath)).type);
+    return href(path, contextPath).map(href -> href.type);
   }
 
   private static Optional<Attributes> attributes(final String path, final String contextPath) {
     return aggregate(path, contextPath).map(a -> Attributes.builder().put(AGGREGATE, a).build());
   }
 
+  private static HeaderHandler authorizationHandler(final Config config) {
+    final String contextPath = contextPath(config);
+    final boolean denyByDefault = denyByDefault(config);
+
+    return headers ->
+        aggregate(uriPath(headers.request().uri()), contextPath)
+                .map(
+                    a ->
+                        command(headers, contextPath)
+                            .map(c -> canDoCommand(config, a, c, headers, denyByDefault))
+                            .orElseGet(() -> canDoPost(config, a, headers, denyByDefault)))
+                .orElse(true)
+            ? headers
+            : forbidden(headers);
+  }
+
+  private static Optional<Set<String>> authorizedRoles(
+      final Config config, final String aggregate, final String command) {
+    return configValue(config::getStringList, AUTHORIZATION + "." + aggregate + "." + command)
+        .map(HashSet::new);
+  }
+
+  private static Optional<Set<String>> authorizedRolesPost(
+      final Config config, final String aggregate) {
+    return configValue(config::getConfig, AUTHORIZATION + "." + aggregate)
+        .map(
+            c ->
+                c.entrySet().stream()
+                    .filter(e -> !e.getKey().equals(GET))
+                    .flatMap(
+                        e ->
+                            configValue(c::getStringList, e.getKey()).stream()
+                                .flatMap(Collection::stream))
+                    .collect(toSet()));
+  }
+
+  private static boolean canDoCommand(
+      final Config config,
+      final String aggregate,
+      final String command,
+      final Headers headers,
+      final boolean denyByDefault) {
+    return authorizedRoles(config, aggregate, command)
+        .map(r -> !intersection(r, roles(headers)).isEmpty())
+        .orElse(!denyByDefault);
+  }
+
+  private static boolean canDoPost(
+      final Config config,
+      final String aggregate,
+      final Headers headers,
+      final boolean denyByDefault) {
+    return authorizedRolesPost(config, aggregate)
+        .filter(r -> !r.isEmpty())
+        .map(r -> !intersection(r, roles(headers)).isEmpty())
+        .orElse(!denyByDefault);
+  }
+
   private static String contextPath(final Config config) {
     return configValue(config::getString, CONTEXT_PATH).orElse("");
+  }
+
+  private static Optional<String> command(final Headers headers, final String contextPath) {
+    return Cases.<HttpMethod, String>withValue(headers.request().method())
+        .or(m -> m.equals(HttpMethod.DELETE), m -> DELETE)
+        .or(m -> m.equals(HttpMethod.GET) || isSearch(headers, contextPath), m -> GET)
+        .or(m -> m.equals(HttpMethod.PUT), m -> PUT)
+        .get();
   }
 
   private static void copyHeaders(final Response r1, final HttpResponse r2) {
@@ -205,6 +288,14 @@ public class ApiServer {
         + "] [ responseBody: "
         + metrics.responseBytes()
         + "]";
+  }
+
+  private static boolean denyByDefault(final Config config) {
+    return configValue(config::getBoolean, DENY_BY_DEFAULT).orElse(DEFAULT_DENY_BY_DEFAULT);
+  }
+
+  private static Headers forbidden(final Headers headers) {
+    return new Headers(headers.request(), headers.response().setStatus(FORBIDDEN));
   }
 
   private static CompletionStage<Publisher<ByteBuf>> handleRequest(
@@ -251,10 +342,6 @@ public class ApiServer {
             });
   }
 
-  private static HeaderHandler headerHandler(final Config config) {
-    return configValue(config::getString, JWT_PUBLIC_KEY).map(JWTVerifier::verify).orElse(h -> h);
-  }
-
   private static RequestHandler health() {
     return (request, requestBody, response) -> {
       response.setStatus(OK);
@@ -263,8 +350,12 @@ public class ApiServer {
     };
   }
 
+  private static Optional<Href> href(final String path, final String contextPath) {
+    return tryToGetSilent(() -> new Href(realPath(path, contextPath)));
+  }
+
   private static boolean isHealthCheck(final HttpRequest req, final String contextPath) {
-    return req.method().equals(GET) && isHealthCheckPath(req, contextPath);
+    return req.method().equals(HttpMethod.GET) && isHealthCheckPath(req, contextPath);
   }
 
   private static boolean isHealthCheckPath(final HttpRequest req, final String contextPath) {
@@ -279,8 +370,23 @@ public class ApiServer {
         .orElse(false);
   }
 
+  private static boolean isPost(final Headers headers) {
+    return headers.request().method().equals(HttpMethod.POST);
+  }
+
+  private static boolean isSearch(final Headers headers, final String contextPath) {
+    return href(uriPath(headers.request().uri()), contextPath)
+            .filter(href -> href.id == null)
+            .isPresent()
+        && isPost(headers);
+  }
+
   private static Optional<JsonObject> jwt(final HttpRequest request) {
     return getBearerToken(request).flatMap(net.pincette.jwt.Util::getJwtPayload);
+  }
+
+  private static HeaderHandler jwtHandler(final Config config) {
+    return configValue(config::getString, JWT_PUBLIC_KEY).map(JWTVerifier::verify).orElse(h -> h);
   }
 
   private static Map<String, Object> kafkaConfig(final Config config) {
@@ -393,7 +499,10 @@ public class ApiServer {
                         new HttpServer(
                             parseInt(args[0]),
                             when(request -> isHealthCheck(request, contextPath), health())
-                                .orElse(handle(headerHandler(config)).finishWith(requestHandler))),
+                                .orElse(
+                                    handle(jwtHandler(config))
+                                        .then(authorizationHandler(config))
+                                        .finishWith(requestHandler))),
                     ApiServer::start);
               });
         });
@@ -433,6 +542,17 @@ public class ApiServer {
                 ofNullable(response.exception)
                     .map(net.pincette.util.Util::getStackTrace)
                     .map(s -> Source.of(o(f("exception", v(s))))));
+  }
+
+  private static Set<String> roles(final Headers headers) {
+    return getBearerToken(headers.request())
+        .flatMap(net.pincette.jwt.Util::getJwtPayload)
+        .flatMap(token -> getArray(token, "/" + ROLES))
+        .stream()
+        .flatMap(Collection::stream)
+        .filter(JsonUtil::isString)
+        .map(v -> asString(v).getString())
+        .collect(toSet());
   }
 
   private static Map<String, String[]> setCookie(

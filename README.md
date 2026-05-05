@@ -15,46 +15,72 @@ One special path is `<contextPath>/health`, which just returns status code 200 (
 
 All requests should have a [JSON Web Token](https://jwt.io), which may appear as a bearer token in the `Authotrization` header or the cookie named `access_token`. If the configuration has a public key, then the tokens will be validated. But normally you would put the service behind some gateway that handles the validation.
 
+## Authorization
+
+The `roles` field in the JWT is used to determine whether the request is allowed. It is an array 
+of strings. A command with access control has an array of roles that can execute the command. If 
+the intersection of the latter and the `roles` field is not empty, the request can go through.
+
+In the configuration you can have entries like `authorization.<aggregate>.<command>`, which 
+have arrays of role names as their value. These are used for the intersection. If there are no 
+roles for a command, then the configuration entry `authorization.denyByDefault` says whether the 
+request is allowed.
+
+The HTTP methods `GET`, `PUT` and `DELETE` correspond respectively to the commands `get`, 
+`put` and `delete`. Posting a search to an aggregate also corresponds to the `get` command. All 
+other commands are posted to an individual aggregate instance.
+
+If the data set for an aggregate is segmented across the population that can work with it, then 
+you can use [Access Control Lists](https://jsonstreams.io/docs/state.html#access-control) in the 
+data itself. So, you could have some high-level role in the configuration and more specific ones 
+in the ACLs.
+
+The ACLs also filter what is returned to the client. A search result will only contain the 
+aggregate instances the user is allowed to see. A `GET` on an instance the user cannot see will 
+return 404. So, ACLs completely hide aggregate instances.
+
 ## Configuration
 
-The configuration is managed by the [Lightbend Config package](https://github.com/lightbend/config). By default it will try to load `conf/application.conf`. An alternative configuration may be loaded by adding `-Dconfig.resource=myconfig.conf`, where the file is also supposed to be in the `conf` directory. If no configuration file is available it will load a default one from the resources. The following entries are available:
+The configuration is managed by the [Lightbend Config package](https://github.com/lightbend/config). By default, it will try to load `conf/application.conf`. An alternative configuration may be loaded by adding `-Dconfig.resource=myconfig.conf`, where the file is also supposed to be in the `conf` directory. If no configuration file is available it will load a default one from the resources. The following entries are available:
 
-|Entry|Mandatory|Default|Description|
-|---|---|---|---|
-|accessLog|No|false|A boolean indicating if access log entries should be sent to the log topic, which should be set.|
-|contextPath|No|/api|The URL path prefix.|
-|environment|No|None|The name of the environment, which will be used as a suffix for the aggregates, e.g. `tst`, `acc`, etc.|
-|jwtPublicKey|No|None|The public key string, which is used to validate all JSON Web Tokens.|
-|kafka|No|localhost:9092|All Kafka settings come below this entry. So for example, the setting `bootstrap.servers` would go to the entry `kafka.bootstrap.servers`. The equivalent environment variable would then be `KAFKA_BOOTSTRAP_SERVERS`.|
-|logLevel|No|INFO|The log level as defined in [java.util.logging.Level](https://docs.oracle.com/javase/8/docs/api/java/util/logging/Level.html).|
-|mongodb.database|No|es|The name of the MongoDB database.|
-|mongodb.uri|No|mongodb://localhost:27017|The URI of the MongoDB service.|
-|namespace|No|jes-http|A name to distinguish several deployments in the same environment.|
-|otlp.grpc|No|None|The OpenTelemetry endpoint for logs and metrics. It should be a URL like `http://localhost:4317`.|
-|slowRequestThreshold|No|None|If this duration is set, then requests that take longer are logged with their request body.|
-|traceSamplePercentage|No|10|The percentage of distributed trace samples that are retained. The value should be between 1 and 100. You should use the same percentage in all components that contribute to a trace, otherwise you may see incomplete traces.|
-|tracesTopic|No|None|The Kafka topic to which event traces are sent.|
-|whoami|No|None|An array of fields that are extracted from the JWT and put in a JSON object that becomes the value of the `whoami` cookie. The cookie can be used by clients to obtain basic information about the current user.|
+| Entry                                 | Default                   | Description                                                                                                                                                                                                                     |
+|---------------------------------------|---------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| accessLog                             | false                     | A boolean indicating if access log entries should be sent to the log topic, which should be set.                                                                                                                                |
+| authorization.denyByDefault           | false                     | Commands for which there are no roles are allowed if this entry is `false`.                                                                                                                                                     |
+| authorization.\<aggregate>.\<command> | None                      | The array of role names that are allowed to execute the command.                                                                                                                                                                |
+| contextPath                           | /api                      | The URL path prefix.                                                                                                                                                                                                            |
+| environment                           | None                      | The name of the environment, which will be used as a suffix for the aggregates, e.g. `tst`, `acc`, etc.                                                                                                                         |
+| jwtPublicKey                          | None                      | The public key string, which is used to validate all JSON Web Tokens.                                                                                                                                                           |
+| kafka                                 | localhost:9092            | All Kafka settings come below this entry. So for example, the setting `bootstrap.servers` would go to the entry `kafka.bootstrap.servers`. The equivalent environment variable would then be `KAFKA_BOOTSTRAP_SERVERS`.         |
+| logLevel                              | INFO                      | The log level as defined in [java.util.logging.Level](https://docs.oracle.com/javase/8/docs/api/java/util/logging/Level.html).                                                                                                  |
+| mongodb.database                      | es                        | The name of the MongoDB database.                                                                                                                                                                                               |
+| mongodb.uri                           | mongodb://localhost:27017 | The URI of the MongoDB service.                                                                                                                                                                                                 |
+| namespace                             | jes-http                  | A name to distinguish several deployments in the same environment.                                                                                                                                                              |
+| otlp.grpc                             | None                      | The OpenTelemetry endpoint for logs and metrics. It should be a URL like `http://localhost:4317`.                                                                                                                               |
+| slowRequestThreshold                  | None                      | If this duration is set, then requests that take longer are logged with their request body.                                                                                                                                     |
+| traceSamplePercentage                 | 10                        | The percentage of distributed trace samples that are retained. The value should be between 1 and 100. You should use the same percentage in all components that contribute to a trace, otherwise you may see incomplete traces. |
+| tracesTopic                           | None                      | The Kafka topic to which event traces are sent.                                                                                                                                                                                 |
+| whoami                                | None                      | An array of fields that are extracted from the JWT and put in a JSON object that becomes the value of the `whoami` cookie. The cookie can be used by clients to obtain basic information about the current user.                |
 
 ## Telemetry
 
 A few OpenTelemetry observable counters are emitted every minute. The following table shows the counters.
 
-|Counter|Description|
-|---|---|
-|http.server.average_duration_millis|The average request duration in the measured interval.|
-|http.server.average_request_bytes|The average request body size in bytes in the measured interval.|
-|http.server.average_response_bytes|The average response body size in bytes in the measured interval.|
-|http.server.requests|The number of requests during the measured interval.|
+| Counter                             | Description                                                       |
+|-------------------------------------|-------------------------------------------------------------------|
+| http.server.average_duration_millis | The average request duration in the measured interval.            |
+| http.server.average_request_bytes   | The average request body size in bytes in the measured interval.  |
+| http.server.average_response_bytes  | The average response body size in bytes in the measured interval. |
+| http.server.requests                | The number of requests during the measured interval.              |
 
 The following attributes are added to the counters.
 
-|Attribute|Description|
-|---|---|
-|aggregate|The name of the aggregate the request was about.|
-|http.request.method|The request method.|
-|http.response.status_code|The status code of the response.|
-|instance|The UUID of the JES HTTP instance.|
+| Attribute                 | Description                                      |
+|---------------------------|--------------------------------------------------|
+| aggregate                 | The name of the aggregate the request was about. |
+| http.request.method       | The request method.                              |
+| http.response.status_code | The status code of the response.                 |
+| instance                  | The UUID of the JES HTTP instance.               |
 
 The logs are also sent to the OpenTelemetry endpoint.
 
