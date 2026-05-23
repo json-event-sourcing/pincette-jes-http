@@ -163,7 +163,7 @@ public class ApiServer {
   private static final String TRACES_TOPIC = "tracesTopic";
   private static final String URL_PATH = "url.path";
   private static final String USERNAME = "username";
-  private static final String VERSION = "3.3.0";
+  private static final String VERSION = "3.3.1";
   private static final String WARN_LOOKUP = "warnLookup";
   private static final String WHOAMI = "whoami";
 
@@ -174,6 +174,14 @@ public class ApiServer {
     return configValue(config::getBoolean, ACCESS_LOG)
         .filter(a -> a)
         .map(a -> lambdaSubscriber(metrics -> LOGGER.info(() -> createAccessLogMessage(metrics))));
+  }
+
+  private static Map<String, String[]> addBearerToken(
+      final Map<String, String[]> headers, final HttpRequest request) {
+    getBearerToken(request)
+        .ifPresent(token -> headers.put(AUTHORIZATION, new String[] {"Bearer " + token}));
+
+    return headers;
   }
 
   private static void addOtelLogger(final Config config) {
@@ -593,7 +601,7 @@ public class ApiServer {
                 new Request()
                     .withUri(request.uri())
                     .withMethod(request.method().name())
-                    .withHeaders(toHeaders(request.headers()))
+                    .withHeaders(addBearerToken(toHeaders(request.headers()), request))
                     .withPath(uri.getPath())
                     .withQueryString(uri.getQuery()));
   }
