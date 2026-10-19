@@ -6,7 +6,7 @@
 
   <groupId>net.pincette</groupId>
   <artifactId>pincette-jes-http</artifactId>
-  <version>3.3.7</version>
+  <version>3.3.8</version>
   <name>pincette-jes-http</name>
   <description>HTTP Server For JSON Event Sourcing</description>
   <url>https://github.com/json-event-sourcing/pincette-jes-http</url>
@@ -53,7 +53,7 @@
       <dependency>
         <groupId>software.amazon.awssdk</groupId>
         <artifactId>bom</artifactId>
-        <version>2.55.11</version>
+        <version>2.56.0</version>
         <type>pom</type>
         <scope>import</scope>
       </dependency>
@@ -69,12 +69,12 @@
     <dependency>
       <groupId>net.pincette</groupId>
       <artifactId>pincette-jes-api</artifactId>
-      <version>4.2.10</version>
+      <version>4.2.11</version>
     </dependency>
     <dependency>
       <groupId>net.pincette</groupId>
       <artifactId>pincette-netty-http</artifactId>
-      <version>3.2.26</version>
+      <version>3.2.27</version>
     </dependency>
     <dependency>
       <groupId>net.pincette</groupId>
@@ -94,12 +94,12 @@
     <dependency>
       <groupId>net.pincette</groupId>
       <artifactId>pincette-kafka-json</artifactId>
-      <version>1.0.22</version>
+      <version>1.0.23</version>
     </dependency>
     <dependency>
       <groupId>net.pincette</groupId>
       <artifactId>pincette-jwt</artifactId>
-      <version>1.1.9</version>
+      <version>1.1.10</version>
     </dependency>
     <dependency>
       <groupId>net.pincette</groupId>
@@ -118,12 +118,12 @@
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-api</artifactId>
-      <version>2.0.19</version>
+      <version>2.0.20</version>
     </dependency>
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-jdk14</artifactId>
-      <version>2.0.19</version>
+      <version>2.0.20</version>
     </dependency>
   </dependencies>
 
